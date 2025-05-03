@@ -410,7 +410,7 @@ class MeshBuilder {
 		let geometry: THREE.PlaneGeometry;
 		let position: [number, number, number] = [0, 0, 0];
 
-		// Create the appropriate geometry for each face with correct dimensions
+		// Create the appropriate geometry for each face
 		switch (direction) {
 			case "down":
 				geometry = new THREE.PlaneGeometry(size[0], size[2]);
@@ -445,72 +445,8 @@ class MeshBuilder {
 				throw new Error(`Unknown face direction: ${direction}`);
 		}
 
-		// Apply UV mapping if specified
-		if (faceData.uv) {
-			const [uMin, vMin, uMax, vMax] = faceData.uv;
-
-			// Handle reversed UVs
-			const u1 = Math.min(uMin, uMax) / 16;
-			const u2 = Math.max(uMin, uMax) / 16;
-			const v1 = Math.min(vMin, vMax) / 16;
-			const v2 = Math.max(vMin, vMax) / 16;
-
-			// Minecraft V coordinates go from top to bottom, THREE.js goes bottom to top
-			const y1 = 1 - v2;
-			const y2 = 1 - v1;
-
-			const uvs = geometry.attributes.uv as THREE.BufferAttribute;
-
-			// Default UV mapping (will be rotated if needed)
-			const uvArray = [
-				u1,
-				y1, // bottom left
-				u2,
-				y1, // bottom right
-				u1,
-				y2, // top left
-				u2,
-				y2, // top right
-			];
-
-			// Apply UV mapping
-			uvs.set(uvArray);
-
-			// Apply rotation (This is separate from the rotation property and applies to the UV coordinates)
-			if (faceData.rotation) {
-				const tempBuffer = new Float32Array(8);
-
-				// Clone current UVs
-				tempBuffer.set(uvArray);
-
-				// Apply rotation
-				switch (faceData.rotation) {
-					case 90:
-						// 90° rotation: u1,v1 → u2,v1 → u2,v2 → u1,v2 → u1,v1
-						uvs.setXY(0, tempBuffer[2], tempBuffer[3]); // bottom left
-						uvs.setXY(1, tempBuffer[0], tempBuffer[1]); // bottom right
-						uvs.setXY(2, tempBuffer[6], tempBuffer[7]); // top left
-						uvs.setXY(3, tempBuffer[4], tempBuffer[5]); // top right
-						break;
-					case 180:
-						// 180° rotation: u1,v1 → u2,v2 → u1,v2 → u2,v1 → u1,v1
-						uvs.setXY(0, tempBuffer[6], tempBuffer[7]); // bottom left
-						uvs.setXY(1, tempBuffer[4], tempBuffer[5]); // bottom right
-						uvs.setXY(2, tempBuffer[2], tempBuffer[3]); // top left
-						uvs.setXY(3, tempBuffer[0], tempBuffer[1]); // top right
-						break;
-					case 270:
-						// 270° rotation: u1,v1 → u1,v2 → u2,v2 → u2,v1 → u1,v1
-						uvs.setXY(0, tempBuffer[4], tempBuffer[5]); // bottom left
-						uvs.setXY(1, tempBuffer[6], tempBuffer[7]); // bottom right
-						uvs.setXY(2, tempBuffer[0], tempBuffer[1]); // top left
-						uvs.setXY(3, tempBuffer[2], tempBuffer[3]); // top right
-						break;
-				}
-			}
-
-			uvs.needsUpdate = true;
-		}
+		// Map UV coordinates - the core of our fix
+		this.mapUVCoordinates(geometry, direction, faceData);
 
 		// Resolve texture
 		const texturePath = this.assetLoader.resolveTexture(
@@ -552,6 +488,117 @@ class MeshBuilder {
 		mesh.position.set(...position);
 
 		return mesh;
+	}
+
+	/**
+	 * Map UV coordinates correctly for a face based on direction and element dimensions
+	 */
+	private mapUVCoordinates(
+		geometry: THREE.PlaneGeometry,
+		direction: string,
+		faceData: any
+	): void {
+		// If no UVs specified, use default
+		if (!faceData.uv) {
+			return;
+		}
+
+		// Get the UV attribute
+		const uvAttribute = geometry.attributes.uv as THREE.BufferAttribute;
+
+		// Parse UVs from the face data (Minecraft 0-16 format)
+		const [uMin, vMin, uMax, vMax] = faceData.uv;
+
+		// Use a single canonical UV ordering for ALL faces
+		// This eliminates the per-face mirroring that was causing problems
+		const uvCoords = this.getBaseUVs(
+			uMin / 16,
+			vMin / 16,
+			uMax / 16,
+			vMax / 16
+		);
+
+		// Apply rotation if specified (this will now work correctly for all faces)
+		if (faceData.rotation) {
+			this.applyUVRotation(uvCoords, faceData.rotation);
+		}
+
+		// Set the UVs
+		uvAttribute.set(uvCoords);
+		uvAttribute.needsUpdate = true;
+	}
+
+	/**
+	 * Get the base UV coordinates in a consistent, canonical ordering
+	 */
+	private getBaseUVs(
+		u1: number,
+		v1: number,
+		u2: number,
+		v2: number
+	): Float32Array {
+		// Convert from Minecraft's (0,0 = top-left) to Three.js (0,0 = bottom-left)
+		// Always use the same ordering for all faces
+		const y1 = 1 - v2; // Top becomes bottom
+		const y2 = 1 - v1; // Bottom becomes top
+
+		// Single canonical ordering for every face (BL, BR, TL, TR)
+		return new Float32Array([
+			u1,
+			y1, // Bottom left
+			u2,
+			y1, // Bottom right
+			u1,
+			y2, // Top left
+			u2,
+			y2, // Top right
+		]);
+	}
+
+	/**
+	 * Apply UV rotation to the texture coordinates
+	 */
+	private applyUVRotation(uvCoords: Float32Array, rotation: number): void {
+		// Make a copy of the original UV coordinates
+		const temp = new Float32Array(uvCoords);
+
+		// Apply rotation based on degrees
+		switch (rotation) {
+			case 0: // No rotation
+				break;
+			case 90: // 90 degrees clockwise
+				uvCoords[0] = temp[4];
+				uvCoords[1] = temp[5]; // bottom left gets top left
+				uvCoords[2] = temp[0];
+				uvCoords[3] = temp[1]; // bottom right gets bottom left
+				uvCoords[4] = temp[6];
+				uvCoords[5] = temp[7]; // top left gets top right
+				uvCoords[6] = temp[2];
+				uvCoords[7] = temp[3]; // top right gets bottom right
+				break;
+			case 180: // 180 degrees
+				uvCoords[0] = temp[6];
+				uvCoords[1] = temp[7]; // bottom left gets top right
+				uvCoords[2] = temp[4];
+				uvCoords[3] = temp[5]; // bottom right gets top left
+				uvCoords[4] = temp[2];
+				uvCoords[5] = temp[3]; // top left gets bottom right
+				uvCoords[6] = temp[0];
+				uvCoords[7] = temp[1]; // top right gets bottom left
+				break;
+			case 270: // 270 degrees clockwise
+				uvCoords[0] = temp[2];
+				uvCoords[1] = temp[3]; // bottom left gets bottom right
+				uvCoords[2] = temp[6];
+				uvCoords[3] = temp[7]; // bottom right gets top right
+				uvCoords[4] = temp[0];
+				uvCoords[5] = temp[1]; // top left gets bottom left
+				uvCoords[6] = temp[4];
+				uvCoords[7] = temp[5]; // top right gets top left
+				break;
+			default:
+				console.warn(`Unsupported rotation: ${rotation}`);
+		}
 	}
 
 	/**
