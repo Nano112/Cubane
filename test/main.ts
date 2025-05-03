@@ -38,17 +38,6 @@ scene.add(light2);
 camera.position.z = 5;
 camera.position.y = 2;
 
-// Add an input field and button to test different blocks
-const controls = document.createElement("div");
-controls.className = "absolute top-4 left-4 flex gap-2";
-controls.innerHTML = `
-  <input id="blockInput" class="px-2 py-1 bg-gray-800 border border-gray-700 rounded" 
-         value="minecraft:oak_log[axis=y]" />
-  <button id="loadBlock" class="px-3 py-1 bg-blue-600 rounded">Load Block</button>
-  <button id="loadResourcePack" class="px-3 py-1 bg-green-600 rounded">Load Resource Pack</button>
-`;
-document.body.appendChild(controls);
-
 // Set up resource pack loading
 document
 	.getElementById("loadResourcePack")
