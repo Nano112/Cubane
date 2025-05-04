@@ -8,6 +8,14 @@ export interface Block {
 	name: string;
 	properties: Record<string, string>;
 }
+const FACING_UV_ROT: Record<string, 0 | 90 | 180 | 270> = {
+	south: 180,
+	east: 180,
+	north: 180,
+	west: 180,
+	up: 0, // ← no extra turn
+	down: 0, // ← no extra turn
+};
 
 /**
  * Parse a block string like "minecraft:oak_log[axis=y]" into structured data
@@ -575,10 +583,11 @@ class MeshBuilder {
 		);
 
 		// Apply rotation if specified (this will now work correctly for all faces)
-		if (faceData.rotation) {
-			this.applyUVRotation(uvCoords, faceData.rotation);
+		const rot =
+			((faceData.rotation ?? 0) + FACING_UV_ROT[direction]) /* ← new */ % 360;
+		if (rot !== 0) {
+			this.applyUVRotation(uvCoords, rot);
 		}
-
 		// Set the UVs
 		uvAttribute.set(uvCoords);
 		uvAttribute.needsUpdate = true;

@@ -53,7 +53,8 @@ document
 			const file = (e.target as HTMLInputElement).files?.[0];
 			if (file) {
 				await loadResourcePack(file);
-				alert("Resource pack loaded successfully!");
+				// alert("Resource pack loaded successfully!");
+				console.log("Resource pack loaded successfully!");
 			}
 		};
 		input.click();
@@ -89,6 +90,8 @@ const animate = function () {
 	camera.position.z = 5 * Math.sin(angle);
 	if (currentMesh) {
 		camera.lookAt(currentMesh.position);
+	} else {
+		camera.lookAt(0, 0, 0);
 	}
 	angle += speed;
 	// Update animated textures
