@@ -501,6 +501,28 @@ export class AssetLoader {
 		}
 	}
 
+	public async getEntityTexture(entityName: string): Promise<THREE.Texture> {
+		// Common entity texture paths
+		const texturePaths = [
+			`entity/${entityName}`,
+			`entity/${entityName}/${entityName}`,
+			`entity/chest/${entityName}`, // Special case for chest variants
+		];
+
+		// Try each possible path
+		for (const path of texturePaths) {
+			try {
+				const texture = await this.getTexture(path);
+				if (texture) return texture;
+			} catch (error) {
+				// Continue to next path
+			}
+		}
+
+		console.warn(`Entity texture not found for ${entityName}`);
+		return this.createMissingTexture();
+	}
+
 	/**
 	 * Create a texture for missing textures
 	 */

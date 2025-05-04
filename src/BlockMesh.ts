@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import JSZip from "jszip";
 import { AssetLoader, BlockModel, BlockModelElement } from "./AssetLoader";
-
+import { EntityRenderer } from "./EntityRenderer";
+import { EntityModelLoader } from "./EntityModelLoader";
 // Block parser interface and function
 export interface Block {
 	namespace: string;
@@ -15,6 +16,14 @@ const FACING_UV_ROT: Record<string, 0 | 90 | 180 | 270> = {
 	west: 180,
 	up: 0, // ← no extra turn
 	down: 0, // ← no extra turn
+};
+
+const BLOCK_ENTITY_MAP = {
+	"minecraft:chest": "chest",
+	"minecraft:trapped_chest": "trapped_chest",
+	"minecraft:ender_chest": "ender_chest",
+	"minecraft:bell": "bell",
+	// Add other block entities as needed
 };
 
 /**
@@ -791,6 +800,8 @@ class MeshBuilder {
 const assetLoader = new AssetLoader();
 const modelResolver = new ModelResolver(assetLoader);
 const meshBuilder = new MeshBuilder(assetLoader);
+const entityModelLoader = new EntityModelLoader();
+const entityRenderer = new EntityRenderer(assetLoader, entityModelLoader);
 
 // Track initialization status
 let initialized = false;
@@ -835,6 +846,15 @@ export async function getBlockMesh(
 		// Parse block string
 		const block = parseBlockString(blockString);
 		console.log("Parsed block:", block);
+
+		// Check if this is a block entity
+		const blockId = `${block.namespace}:${block.name}`;
+		const entityType = BLOCK_ENTITY_MAP[blockId];
+
+		if (entityType) {
+			// This is a block entity, use entity renderer
+			return entityRenderer.createEntityMesh(entityType);
+		}
 
 		// Resolve model data
 		const modelDataList = await modelResolver.resolveBlockModel(block);

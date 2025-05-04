@@ -13,6 +13,19 @@ export class TintManager {
 		this.tintableBlocks.set("minecraft:grass_block", "foliage");
 		this.tintableBlocks.set("minecraft:oak_leaves", "foliage");
 		this.tintableBlocks.set("minecraft:birch_leaves", "foliage");
+		this.tintableBlocks.set("minecraft:spruce_leaves", "foliage");
+		this.tintableBlocks.set("minecraft:jungle_leaves", "foliage");
+		this.tintableBlocks.set("minecraft:acacia_leaves", "foliage");
+		this.tintableBlocks.set("minecraft:dark_oak_leaves", "foliage");
+		this.tintableBlocks.set("minecraft:azalea_leaves", "foliage");
+		this.tintableBlocks.set("minecraft:flowering_azalea_leaves", "foliage");
+		this.tintableBlocks.set("minecraft:oak_sapling", "foliage");
+		this.tintableBlocks.set("minecraft:birch_sapling", "foliage");
+		this.tintableBlocks.set("minecraft:spruce_sapling", "foliage");
+		this.tintableBlocks.set("minecraft:jungle_sapling", "foliage");
+		this.tintableBlocks.set("minecraft:acacia_sapling", "foliage");
+		this.tintableBlocks.set("minecraft:lily_pad", "foliage");
+		this.tintableBlocks.set("minecraft:grass", "foliage");
 		// ...more foliage blocks
 
 		// Water
