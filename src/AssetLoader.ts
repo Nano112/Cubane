@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import JSZip from "jszip";
 import { Block } from "./BlockStateParser";
+import { AnimatedTextureManager } from "./AnimatedTextureManager";
 
 export interface BlockStateDefinition {
 	variants?: Record<string, BlockStateModelHolder | BlockStateModelHolder[]>;
@@ -55,6 +56,7 @@ export interface BlockModelElement {
 export class AssetLoader {
 	private resourcePacks: Map<string, JSZip> = new Map();
 	private resourcePackOrder: string[] = [];
+	private animatedTextureManager: AnimatedTextureManager;
 
 	// Caches
 	private stringCache: Map<string, string> = new Map();
@@ -67,6 +69,8 @@ export class AssetLoader {
 	private textureLoader = new THREE.TextureLoader();
 
 	constructor() {
+		this.animatedTextureManager = new AnimatedTextureManager(this);
+
 		console.log("AssetLoader initialized");
 	}
 
@@ -338,6 +342,10 @@ export class AssetLoader {
 		return ref.replace("minecraft:", "");
 	}
 
+	public updateAnimations(): void {
+		this.animatedTextureManager.update();
+	}
+
 	/**
 	 * Get a texture for a given path
 	 */
@@ -358,6 +366,20 @@ export class AssetLoader {
 		}
 
 		console.log(`Loading texture: ${texturePath}`);
+
+		const isAnimated = await this.animatedTextureManager.isAnimated(
+			`textures/${texturePath}`
+		);
+
+		if (isAnimated) {
+			// Handle animated texture
+			const animatedTexture =
+				await this.animatedTextureManager.createAnimatedTexture(texturePath);
+			if (animatedTexture) {
+				this.textureCache.set(cacheKey, animatedTexture);
+				return animatedTexture;
+			}
+		}
 
 		// If path doesn't end with .png, add it
 		const fullPath = texturePath.endsWith(".png")

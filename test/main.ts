@@ -1,6 +1,10 @@
 // test/main.ts
 import * as THREE from "three";
-import { getBlockMesh, loadResourcePack } from "../src/BlockMesh";
+import {
+	getBlockMesh,
+	loadResourcePack,
+	updateAnimatedTextures,
+} from "../src/BlockMesh";
 
 // Canvas and Three.js setup...
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -87,6 +91,8 @@ const animate = function () {
 		camera.lookAt(currentMesh.position);
 	}
 	angle += speed;
+	// Update animated textures
+	updateAnimatedTextures();
 	renderer.render(scene, camera);
 };
 animate();

@@ -118,35 +118,91 @@ class ModelResolver {
 
 			console.log(`Looking for variant: "${variantKey}"`);
 
-			// Try to find the variant
-			let variant = blockStateDefinition.variants[variantKey];
+			// Try to find the variant with multiple approaches
+			let variant;
 
-			// If not found, try empty variant
-			if (!variant && blockStateDefinition.variants[""]) {
+			// First approach: exact match with our properties
+			if (blockStateDefinition.variants[variantKey]) {
+				variant = blockStateDefinition.variants[variantKey];
+			}
+
+			// Second approach: If not found and using empty variant
+			else if (!variant && blockStateDefinition.variants[""]) {
 				console.log(`Variant "${variantKey}" not found, using default variant`);
 				variant = blockStateDefinition.variants[""];
 			}
 
-			// If still not found, try single property variants
-			if (!variant && Object.keys(block.properties).length > 0) {
-				// For blocks like logs with only axis property
-				for (const [key, value] of Object.entries(block.properties)) {
-					const singlePropKey = `${key}=${value}`;
-					if (blockStateDefinition.variants[singlePropKey]) {
-						console.log(`Using single property variant: ${singlePropKey}`);
-						variant = blockStateDefinition.variants[singlePropKey];
-						break;
+			// Third approach: Find the best matching variant
+			else if (!variant) {
+				// Get all property keys we're looking for
+				const targetProps = Object.entries(block.properties);
+
+				// Find variants that match ALL our requested properties
+				// (they might have additional properties we didn't specify)
+				let bestVariantKey = "";
+				let bestMatchCount = -1;
+
+				for (const key of Object.keys(blockStateDefinition.variants)) {
+					// Skip empty key
+					if (key === "") continue;
+
+					const variantProps = key.split(",").map((prop) => {
+						const [name, value] = prop.split("=");
+						return { name, value };
+					});
+
+					// Count how many of our target properties match this variant
+					let matchCount = 0;
+					let allMatch = true;
+
+					for (const [propName, propValue] of targetProps) {
+						const matchingProp = variantProps.find((p) => p.name === propName);
+						if (matchingProp && matchingProp.value === propValue) {
+							matchCount++;
+						} else if (matchingProp) {
+							// Property exists but with wrong value
+							allMatch = false;
+							break;
+						}
+					}
+
+					// If all properties match and we found more matches than before,
+					// update the best match
+					if (allMatch && matchCount > bestMatchCount) {
+						bestMatchCount = matchCount;
+						bestVariantKey = key;
 					}
 				}
-			}
 
-			// If still not found, use first available variant
-			if (!variant && variantKeys.length > 0) {
-				const firstKey = variantKeys[0];
-				console.log(
-					`No matching variant found, using first available: ${firstKey}`
-				);
-				variant = blockStateDefinition.variants[firstKey];
+				// If we found a matching variant, use it
+				if (bestVariantKey) {
+					console.log(
+						`Found best matching variant: ${bestVariantKey} for requested ${variantKey}`
+					);
+					variant = blockStateDefinition.variants[bestVariantKey];
+				}
+
+				// Fourth approach: try single property variants
+				if (!variant && Object.keys(block.properties).length > 0) {
+					// For blocks like logs with only axis property
+					for (const [key, value] of Object.entries(block.properties)) {
+						const singlePropKey = `${key}=${value}`;
+						if (blockStateDefinition.variants[singlePropKey]) {
+							console.log(`Using single property variant: ${singlePropKey}`);
+							variant = blockStateDefinition.variants[singlePropKey];
+							break;
+						}
+					}
+				}
+
+				// Fifth approach: use first available variant
+				if (!variant && variantKeys.length > 0) {
+					const firstKey = variantKeys[0];
+					console.log(
+						`No matching variant found, using first available: ${firstKey}`
+					);
+					variant = blockStateDefinition.variants[firstKey];
+				}
 			}
 
 			// Add the variant model(s) if found
@@ -691,6 +747,11 @@ let initialized = false;
 const initPromise = Promise.resolve().then(() => {
 	initialized = true;
 });
+
+export function updateAnimatedTextures(): void {
+	// Access the singleton assetLoader instance and call updateAnimations
+	assetLoader.updateAnimations();
+}
 
 /**
  * Load a resource pack for use with block rendering
