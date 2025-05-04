@@ -1,8 +1,7 @@
 import * as THREE from "three";
 import JSZip from "jszip";
-import { Block } from "./BlockStateParser";
 import { AnimatedTextureManager } from "./AnimatedTextureManager";
-
+import { TintManager } from "./TintManager";
 export interface BlockStateDefinition {
 	variants?: Record<string, BlockStateModelHolder | BlockStateModelHolder[]>;
 	multipart?: BlockStateMultipart[];
@@ -57,6 +56,7 @@ export class AssetLoader {
 	private resourcePacks: Map<string, JSZip> = new Map();
 	private resourcePackOrder: string[] = [];
 	private animatedTextureManager: AnimatedTextureManager;
+	private tintManager: TintManager;
 
 	// Caches
 	private stringCache: Map<string, string> = new Map();
@@ -70,7 +70,7 @@ export class AssetLoader {
 
 	constructor() {
 		this.animatedTextureManager = new AnimatedTextureManager(this);
-
+		this.tintManager = new TintManager();
 		console.log("AssetLoader initialized");
 	}
 
@@ -430,17 +430,34 @@ export class AssetLoader {
 		}
 	}
 
+	public getTint(
+		blockId: string,
+		properties: Record<string, string>,
+		position?: THREE.Vector3
+	): THREE.Color {
+		return this.tintManager.getTint(blockId, properties, position);
+	}
+
 	/**
-	 * Create a material for a texture
+	 * Create a material for a texture with optional tinting
 	 */
 	public async getMaterial(
 		texturePath: string,
-		options: { transparent?: boolean } = {}
+		options: {
+			transparent?: boolean;
+			tint?: THREE.Color;
+		} = {}
 	): Promise<THREE.Material> {
-		// Create cache key
+		// Create cache key including tint information
+		const tintKey = options.tint
+			? `:tint:${options.tint.r.toFixed(3)},${options.tint.g.toFixed(
+					3
+			  )},${options.tint.b.toFixed(3)}`
+			: "";
+
 		const cacheKey = `material:${texturePath}:${
 			options.transparent ? "transparent" : "opaque"
-		}`;
+		}${tintKey}`;
 
 		// Check cache first
 		if (this.materialCache.has(cacheKey)) {
@@ -460,15 +477,23 @@ export class AssetLoader {
 				side: options.transparent ? THREE.DoubleSide : THREE.FrontSide,
 			});
 
+			// Apply tint if provided
+			if (options.tint) {
+				material.color = options.tint;
+				// Enable color multiplication with texture
+				material.defines = material.defines || {};
+				material.defines.USE_COLOR = "";
+			}
+
 			// Cache and return
 			this.materialCache.set(cacheKey, material);
 			return material;
 		} catch (error) {
 			console.error(`Error creating material for ${texturePath}:`, error);
 
-			// Create a fallback material
+			// Create a fallback material with tint if provided
 			const material = new THREE.MeshStandardMaterial({
-				color: 0xff00ff, // Magenta for missing textures
+				color: options.tint || new THREE.Color(0xff00ff), // Use tint or magenta for missing textures
 				wireframe: true,
 			});
 

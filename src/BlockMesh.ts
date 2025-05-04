@@ -319,14 +319,22 @@ class MeshBuilder {
 	}
 
 	/**
-	 * Create a Three.js mesh from a block model
-	 */
-	/**
 	 * Create a mesh for a block model
+	 * @param model The block model to create a mesh from
+	 * @param transform Optional transform parameters (x, y rotation and uvlock)
+	 * @param block Optional block data for tinting
+	 * @param biome Optional biome string for color variations, defaults to "plains"
 	 */
 	public async createBlockMesh(
 		model: BlockModel,
-		transform: { x?: number; y?: number; uvlock?: boolean } = {}
+		transform: {
+			x?: number;
+			y?: number;
+			uvlock?: boolean;
+			block?: Block; // Include block in transform object for backward compatibility
+		} = {},
+		block?: Block, // Separate parameter for block data
+		biome: string = "plains" // Default biome if none specified
 	): Promise<THREE.Object3D> {
 		console.log("Creating mesh for model:", model);
 
@@ -336,13 +344,21 @@ class MeshBuilder {
 			return this.createPlaceholderCube();
 		}
 
+		// Get the block from either parameter or transform object for backward compatibility
+		const blockData = block || transform.block;
+
 		// Create a group to hold all elements
 		const group = new THREE.Group();
 
 		// Process each element
 		for (const element of model.elements) {
 			try {
-				const elementMesh = await this.createElementMesh(element, model);
+				const elementMesh = await this.createElementMesh(
+					element,
+					model,
+					blockData,
+					biome
+				);
 				group.add(elementMesh);
 			} catch (error) {
 				console.error("Error creating element mesh:", error);
@@ -363,6 +379,12 @@ class MeshBuilder {
 			return this.createPlaceholderCube();
 		}
 
+		// Store the block data and biome on the group for later reference
+		if (blockData) {
+			(group as any).blockData = blockData;
+		}
+		(group as any).biome = biome;
+
 		// Return the group directly - don't try to combine into a single mesh
 		return group;
 	}
@@ -372,7 +394,9 @@ class MeshBuilder {
 	 */
 	private async createElementMesh(
 		element: BlockModelElement,
-		model: BlockModel
+		model: BlockModel,
+		block?: Block, // Add block parameter
+		biome: string = "plains" // Add biome parameter with default
 	): Promise<THREE.Object3D> {
 		// Extract element properties
 		const from = element.from || [0, 0, 0];
@@ -411,12 +435,14 @@ class MeshBuilder {
 				const faceData = element.faces[direction];
 				if (!faceData) continue;
 
-				// Create face mesh
+				// Create face mesh, passing block and biome
 				const faceMesh = await this.createFaceMesh(
 					direction,
 					size,
 					faceData,
-					model
+					model,
+					block,
+					biome
 				);
 				elementGroup.add(faceMesh);
 			}
@@ -464,11 +490,15 @@ class MeshBuilder {
 		return elementGroup;
 	}
 
+	/**
+	 * Create a mesh for a single face with tinting support
+	 */
 	private async createFaceMesh(
 		direction: string,
 		size: number[],
 		faceData: any,
-		model: BlockModel
+		model: BlockModel,
+		block?: Block // Optional block data for tinting
 	): Promise<THREE.Mesh> {
 		// Create geometry based on direction
 		let geometry: THREE.PlaneGeometry;
@@ -509,7 +539,7 @@ class MeshBuilder {
 				throw new Error(`Unknown face direction: ${direction}`);
 		}
 
-		// Map UV coordinates - the core of our fix
+		// Map UV coordinates
 		this.mapUVCoordinates(geometry, direction, faceData);
 
 		// Resolve texture
@@ -528,9 +558,20 @@ class MeshBuilder {
 				texturePath.includes("leaves") ||
 				texturePath.includes("water");
 
-			// Get material
+			// Check if face requires tinting
+			let tint: THREE.Color | undefined = undefined;
+			if (block && faceData.tintindex !== undefined) {
+				// Get the full block ID including namespace
+				const blockId = `${block.namespace}:${block.name}`;
+				// Get tint from tint manager
+				tint = this.assetLoader.getTint(blockId, block.properties);
+				console.log(`Applied tint to ${blockId} face: ${direction}`, tint);
+			}
+
+			// Get material with tint if needed
 			material = await this.assetLoader.getMaterial(texturePath, {
 				transparent: isTransparent,
+				tint: tint,
 			});
 
 			// Force double-sided rendering for all faces
@@ -776,17 +817,13 @@ export async function loadResourcePack(blob: Blob): Promise<void> {
 /**
  * Get a Three.js mesh for a Minecraft block string
  * @param blockString Block string like "minecraft:oak_log[axis=y]"
- */
-/**
- * Get a Three.js mesh for a Minecraft block string
- * @param blockString Block string like "minecraft:oak_log[axis=y]"
- */
-/**
- * Get a Three.js mesh for a Minecraft block string
- * @param blockString Block string like "minecraft:oak_log[axis=y]"
+ * @param biome Optional biome identifier for tinting, defaults to "plains"
+ * @param position Optional position for additional context
  */
 export async function getBlockMesh(
-	blockString: string
+	blockString: string,
+	biome: string = "plains",
+	position?: THREE.Vector3
 ): Promise<THREE.Object3D> {
 	if (!initialized) {
 		await initPromise;
@@ -818,12 +855,17 @@ export async function getBlockMesh(
 				const model = await assetLoader.getModel(modelData.model);
 				console.log(`Loaded model ${modelData.model}:`, model);
 
-				// Create mesh
-				return await meshBuilder.createBlockMesh(model, {
-					x: modelData.x,
-					y: modelData.y,
-					uvlock: modelData.uvlock,
-				});
+				// Create mesh - passing the block and biome
+				return await meshBuilder.createBlockMesh(
+					model,
+					{
+						x: modelData.x,
+						y: modelData.y,
+						uvlock: modelData.uvlock,
+					},
+					block, // Pass the block for tinting
+					biome // Pass the biome
+				);
 			} catch (error) {
 				console.error(
 					`Error creating mesh for model ${modelData.model}:`,
@@ -854,6 +896,13 @@ export async function getBlockMesh(
 		// For multiple objects, create a parent group
 		const group = new THREE.Group();
 		objects.forEach((obj) => group.add(obj.clone())); // Clone to avoid removing from original parent
+
+		// Store block and biome information on the group for later reference
+		(group as any).blockData = block;
+		(group as any).biome = biome;
+		if (position) {
+			group.position.copy(position);
+		}
 
 		// Set the name of the group for debugging
 		group.name = `block_${block.name.replace("minecraft:", "")}`;
