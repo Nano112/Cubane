@@ -501,28 +501,54 @@ export class AssetLoader {
 		}
 	}
 
+	// Add to your AssetLoader class
 	public async getEntityTexture(entityName: string): Promise<THREE.Texture> {
-		// Common entity texture paths
-		const texturePaths = [
-			`entity/${entityName}`,
-			`entity/${entityName}/${entityName}`,
-			`entity/chest/${entityName}`, // Special case for chest variants
-		];
+		// Specialized texture paths for known entity types
+		let texturePaths: string[] = [];
+
+		if (entityName === "chest") {
+			texturePaths = [
+				"entity/chest/normal",
+				"entity/chest",
+				"entity/chest/chest",
+				"entity/chest/single",
+			];
+		} else if (entityName === "ender_chest") {
+			texturePaths = ["entity/chest/ender", "entity/chest/ender_chest"];
+		} else if (entityName === "trapped_chest") {
+			texturePaths = ["entity/chest/trapped", "entity/chest/trapped_chest"];
+		} else {
+			// Default paths for other entity types
+			texturePaths = [
+				`entity/${entityName}`,
+				`entity/${entityName}/${entityName}`,
+				`entity/${entityName}/model`,
+			];
+		}
 
 		// Try each possible path
 		for (const path of texturePaths) {
 			try {
+				console.log(`Trying texture path: ${path}`);
 				const texture = await this.getTexture(path);
-				if (texture) return texture;
+				if (texture) {
+					console.log(`Successfully loaded texture from ${path}`);
+					return texture;
+				}
 			} catch (error) {
+				console.log(`Failed to load texture from ${path}`);
 				// Continue to next path
 			}
 		}
 
-		console.warn(`Entity texture not found for ${entityName}`);
+		// If we reach here, all paths failed
+		console.warn(
+			`Entity texture not found for ${entityName}. Tried paths: ${texturePaths.join(
+				", "
+			)}`
+		);
 		return this.createMissingTexture();
 	}
-
 	/**
 	 * Create a texture for missing textures
 	 */
