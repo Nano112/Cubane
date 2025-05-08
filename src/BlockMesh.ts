@@ -801,7 +801,7 @@ const assetLoader = new AssetLoader();
 const modelResolver = new ModelResolver(assetLoader);
 const meshBuilder = new MeshBuilder(assetLoader);
 const entityModelLoader = new EntityModelLoader();
-const entityRenderer = new EntityRenderer(assetLoader, entityModelLoader);
+const entityRenderer = new EntityRenderer(entityModelLoader);
 
 // Track initialization status
 let initialized = false;
@@ -849,8 +849,12 @@ export async function getBlockMesh(
 
 		// Check if this is a block entity
 		const blockId = `${block.namespace}:${block.name}`;
-		const entityType = BLOCK_ENTITY_MAP[blockId];
+		let entityType = BLOCK_ENTITY_MAP[blockId];
 
+		//if the block.namespace is entity, use entity renderer
+		if (block.namespace === "entity") {
+			entityType = block.name;
+		}
 		if (entityType) {
 			// This is a block entity, use entity renderer
 			return entityRenderer.createEntityMesh(entityType);
