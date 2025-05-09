@@ -4761,7 +4761,10 @@
 					"translate": [-8, -9, -7],
 					"rotate": [-180, 0, 0],
 					"boxes": [
-						{ "coordinates": [-7, 4, 7, 14, 5, 14], "textureOffset": [0, 0] }
+						{
+							"coordinates": [-7, 4, 7, 14, 5, 14],
+							"textureOffset": [0, 0]
+						}
 					],
 					"animations": [
 						{
@@ -4776,7 +4779,10 @@
 					"translate": [-8, -9, -7],
 					"rotate": [-180, 0, 0],
 					"boxes": [
-						{ "coordinates": [-1, 7, 21, 2, 4, 1], "textureOffset": [0, 0] }
+						{
+							"coordinates": [-1, 7, 21, 2, 4, 1],
+							"textureOffset": [0, 0]
+						}
 					],
 					"animations": [
 						{

@@ -10,19 +10,19 @@ interface MinecraftEntityModel {
 interface MinecraftModelPart {
 	part: string;
 	id: string;
-	invertAxis?: "xy" | "yz" | "xz" | string; // We'll use this as a flag for MC coords
-	translate?: [number, number, number]; // Pivot point of this part
-	rotate?: [number, number, number]; // Rotation in degrees (X, Y, Z) around the pivot
+	invertAxis?: "xy" | "yz" | "xz" | string;
+	translate?: [number, number, number];
+	rotate?: [number, number, number];
 	mirror?: boolean;
 	boxes?: MinecraftModelBox[];
 	submodels?: MinecraftModelPart[];
 }
 
 interface MinecraftModelBox {
-	coordinates: [number, number, number, number, number, number]; // [originX, originY, originZ, sizeX, sizeY, sizeZ]
+	coordinates: [number, number, number, number, number, number];
 	textureOffset: [number, number];
 	sizeAdd?: number;
-	// UV face definitions...
+	sizesAdd?: [number, number, number];
 	uvNorth?: [number, number, number, number];
 	uvEast?: [number, number, number, number];
 	uvSouth?: [number, number, number, number];
@@ -37,10 +37,18 @@ export class EntityRenderer {
 	private debug: boolean = false;
 	private readonly mcScale: number = 1 / 16; // Minecraft pixels to Three.js units
 
-	constructor(entityModelLoader: EntityModelLoader, debug: boolean = false) {
+	constructor(entityModelLoader: EntityModelLoader, debug: boolean = true) {
 		this.entityModelLoader = entityModelLoader;
 		this.textureLoader = new THREE.TextureLoader();
 		this.debug = debug;
+		if (this.debug) {
+			console.log("[EntityRenderer] Debug mode enabled.");
+			console.log("[EntityRenderer] mcScale:", this.mcScale);
+			console.log(
+				"[EntityRenderer] THREE.Object3D.DEFAULT_MATRIX_AUTO_UPDATE:",
+				THREE.Object3D.DEFAULT_MATRIX_AUTO_UPDATE
+			);
+		}
 	}
 
 	public async createEntityMesh(
@@ -67,23 +75,10 @@ export class EntityRenderer {
 			const dataUri = textureBase64.startsWith("data:image/")
 				? textureBase64
 				: `data:image/png;base64,${textureBase64}`;
-
-			if (this.debug)
-				console.log(
-					`[EntityRenderer] Loading texture for "${entityName}" from: ${dataUri.substring(
-						0,
-						70
-					)}...`
-				);
-
 			texture = await new Promise<THREE.Texture>((resolve, reject) => {
 				this.textureLoader.load(
 					dataUri,
 					(loadedTexture) => {
-						if (this.debug)
-							console.log(
-								`[EntityRenderer] Texture loaded for "${entityName}"`
-							);
 						loadedTexture.magFilter = THREE.NearestFilter;
 						loadedTexture.minFilter = THREE.NearestMipmapNearestFilter;
 						loadedTexture.flipY = false;
@@ -105,20 +100,21 @@ export class EntityRenderer {
 
 		const entityGroup = new THREE.Object3D();
 		entityGroup.name = entityName;
-
-		// This is the root container for the entity model.
-		// Minecraft renders entities often with Y up, but models might be authored differently.
-		// A common transform for models authored in tools like Blockbench (Z up default) to
-		// Minecraft's Y-up rendering is to rotate -90 degrees around X.
-		// However, the `invertAxis: 'xy'` and specific negations in Blockbench's JEM exporter
-		// suggest a different approach where coordinates are pre-adjusted.
-
-		// Let's assume the `invertAxis: 'xy'` in the JSON implies a coordinate system adjustment
-		// that's already handled by how the `translate` and `rotate` values are stored.
-
+		const modelIndexToShow = 1; // -1 means show all models
 		if (modelJson.models) {
-			for (const partJson of modelJson.models) {
-				// Pass true for isRootPart if these are the direct children of modelJson.models
+			if (modelIndexToShow < 0 || modelJson.models.length <= modelIndexToShow) {
+				for (const partJson of modelJson.models) {
+					const partGroup = this.createPartMeshRecursive(
+						partJson,
+						modelJson.textureSize,
+						texture,
+						true
+					);
+					entityGroup.add(partGroup);
+				}
+			} else {
+				//only do the first part for now
+				const partJson = modelJson.models[modelIndexToShow];
 				const partGroup = this.createPartMeshRecursive(
 					partJson,
 					modelJson.textureSize,
@@ -134,47 +130,6 @@ export class EntityRenderer {
 				);
 		}
 
-		console.log("--- Verifying entityGroup Rotation ---");
-
-		// What IS entityGroup.rotation right now?
-		console.log("1. entityGroup.rotation object itself:", entityGroup.rotation);
-
-		// If it's an Euler, what are its properties?
-		if (entityGroup.rotation instanceof THREE.Euler) {
-			console.log("2. Is Euler: true");
-			console.log("3. Euler X:", entityGroup.rotation.x);
-			console.log("4. Euler Y:", entityGroup.rotation.y);
-			console.log("5. Euler Z:", entityGroup.rotation.z);
-			const currentOrder = entityGroup.rotation.order;
-			console.log("6. Euler Order (direct access):", currentOrder);
-			console.log("7. typeof Euler Order:", typeof currentOrder); // Should be 'string'
-
-			// Now, let's call toArray on THIS Euler object
-			const eulerArray = entityGroup.rotation.toArray();
-			console.log("8. entityGroup.rotation.toArray() output:", eulerArray);
-			console.log("9. Fourth element of toArray():", eulerArray[3]);
-			console.log("10. typeof fourth element:", typeof eulerArray[3]); // Should be 'string'
-		} else {
-			console.log("2. Is Euler: false");
-			console.log("--- entityGroup is using Quaternion ---");
-			console.log("Quaternion components:", entityGroup.quaternion.toArray());
-			if (entityGroup.quaternion.toArray().some(isNaN)) {
-				console.error("QUATERNION HAS NaN!");
-			}
-		}
-
-		// Explicitly reset to be safe, as discussed before:
-		console.log("--- Applying Explicit Rotation Reset ---");
-		entityGroup.rotation.set(0, 0, 0); // Set X, Y, Z
-		entityGroup.rotation.order = "YXZ"; // Set order
-		console.log("After reset - Euler Order:", entityGroup.rotation.order);
-		console.log("After reset - toArray():", entityGroup.rotation.toArray());
-
-		console.log("--- End Verification ---");
-
-		console.log("Final entityGroup properties BEFORE adding to scene:"); // Your existing logs
-		console.log("entityGroup.position:", entityGroup.position.toArray());
-
 		return entityGroup;
 	}
 
@@ -182,63 +137,23 @@ export class EntityRenderer {
 		partJson: MinecraftModelPart,
 		modelTextureSize: [number, number],
 		texture: THREE.Texture,
-		isRootPart: boolean // Pass true for models in modelJson.models
+		isRootPart: boolean
 	): THREE.Group {
+		// Create a pivot group first - this will be what gets positioned and rotated
+		const pivotGroup = new THREE.Group();
+		pivotGroup.name =
+			(partJson.id || partJson.part || "unnamed_part") + "_pivot";
+
+		// Create the part group that holds the actual geometry
 		const partGroup = new THREE.Group();
 		partGroup.name = partJson.id || partJson.part || "unnamed_part";
 
-		let pivotX = 0,
-			pivotY = 0,
-			pivotZ = 0;
-		if (partJson.translate) {
-			[pivotX, pivotY, pivotZ] = partJson.translate;
-		}
+		// Add the part group to the pivot group
+		pivotGroup.add(partGroup);
 
-		if (isRootPart) {
-			// For root parts, negate the pivot components from JEM.
-			partGroup.position.set(
-				-pivotX * this.mcScale,
-				-pivotY * this.mcScale,
-				-pivotZ * this.mcScale
-			);
-			console.log(
-				`ROOT Part: ${partJson.id}, JEM translate: [${pivotX}, ${pivotY}, ${pivotZ}], APPLIED partGroup.position:`,
-				partGroup.position.toArray().map((c) => c / this.mcScale)
-			); // Log it in JEM units
-		} else {
-			// For submodels
-			partGroup.position.set(
-				pivotX * this.mcScale,
-				pivotY * this.mcScale,
-				pivotZ * this.mcScale
-			);
-			console.log(
-				`SUB Part: ${partJson.id}, JEM translate: [${pivotX}, ${pivotY}, ${pivotZ}], APPLIED partGroup.position:`,
-				partGroup.position.toArray().map((c) => c / this.mcScale)
-			);
-		}
-
-		if (partJson.rotate) {
-			// Rotation values from JEM are used directly.
-			// The YXZ order is common for Minecraft entities.
-			partGroup.rotation.set(
-				THREE.MathUtils.degToRad(partJson.rotate[0]),
-				THREE.MathUtils.degToRad(partJson.rotate[1]),
-				THREE.MathUtils.degToRad(partJson.rotate[2]),
-				"YXZ"
-			);
-		}
-
-		if (partJson.mirror) {
-			partGroup.scale.x = -1;
-		}
-
-		partGroup.updateMatrix();
-		partGroup.updateMatrixWorld(true);
-
+		// Create and add boxes to the part group
 		if (partJson.boxes) {
 			for (const boxJson of partJson.boxes) {
-				// Box coordinates are relative to the part's pivot (now partGroup.position).
 				const boxMesh = this.createBoxMesh(
 					boxJson,
 					modelTextureSize,
@@ -251,37 +166,312 @@ export class EntityRenderer {
 			}
 		}
 
+		// Add submodels to the part group (not the pivot)
 		if (partJson.submodels) {
 			for (const subPartJson of partJson.submodels) {
-				// Pass false for isRootPart for submodels.
-				const subPartGroup = this.createPartMeshRecursive(
+				const subPartPivot = this.createPartMeshRecursive(
 					subPartJson,
 					modelTextureSize,
 					texture,
 					false
 				);
-				partGroup.add(subPartGroup);
+				partGroup.add(subPartPivot);
 			}
 		}
-		partGroup.updateMatrix();
-		partGroup.updateMatrixWorld(true);
-		return partGroup;
+
+		// Apply transforms to the pivot
+		this.applyPivotTransforms(pivotGroup, partJson, isRootPart);
+
+		return pivotGroup;
+	}
+
+	private applyPivotTransforms(
+		pivotGroup: THREE.Group,
+		partJson: MinecraftModelPart,
+		isRootPart: boolean
+	): void {
+		// Extract translation values and apply invertAxis
+		let pivotX_jem = 0,
+			pivotY_jem = 0,
+			pivotZ_jem = 0;
+		if (partJson.translate) {
+			[pivotX_jem, pivotY_jem, pivotZ_jem] = partJson.translate;
+		}
+
+		let invertX = false,
+			invertY = false,
+			invertZ = false;
+		if (partJson.invertAxis) {
+			invertX = partJson.invertAxis.includes("x");
+			invertY = partJson.invertAxis.includes("y");
+			invertZ = partJson.invertAxis.includes("z");
+		}
+
+		let translatedX = pivotX_jem;
+		let translatedY = pivotY_jem;
+		let translatedZ = pivotZ_jem;
+
+		if (invertX) translatedX = -translatedX;
+		if (invertY) translatedY = -translatedY;
+		if (invertZ) translatedZ = -translatedZ;
+
+		// Set position
+		pivotGroup.position.set(
+			translatedX * this.mcScale,
+			translatedY * this.mcScale,
+			translatedZ * this.mcScale
+		);
+
+		// Apply rotation to the pivot
+		// if (partJson.rotate) {
+		// 	pivotGroup.rotation.set(
+		// 		THREE.MathUtils.degToRad(partJson.rotate[0]),
+		// 		THREE.MathUtils.degToRad(partJson.rotate[1]),
+		// 		THREE.MathUtils.degToRad(partJson.rotate[2])
+		// 	);
+		// }
+
+		if (this.debug) {
+			//Show the center of the pivot
+			const pivotCenter = pivotGroup.position.clone();
+			const pivotSize = 0.05;
+			const pivotGeometry = new THREE.SphereGeometry(pivotSize, 8, 8);
+			const pivotMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+			const pivotMesh = new THREE.Mesh(pivotGeometry, pivotMaterial);
+			pivotMesh.position.copy(pivotCenter);
+			pivotMesh.name = `${pivotGroup.name}_center`;
+			pivotGroup.add(pivotMesh);
+			console.log(pivotGroup);
+		}
+
+		// Apply mirroring if needed (to the part group inside the pivot)
+		if (partJson.mirror && pivotGroup.children.length > 0) {
+			pivotGroup.children[0].scale.x = -1;
+		}
 	}
 
 	private createBoxMesh(
 		boxJson: MinecraftModelBox,
 		modelTextureSize: [number, number],
 		texture: THREE.Texture,
-		parentPartJson: MinecraftModelPart // For context, e.g., debug naming
+		parentPartJson: MinecraftModelPart
 	): THREE.Mesh | null {
-		// ... (UV calculation logic remains the same as before)
-		const [texU_offset, texV_offset] = boxJson.textureOffset;
-		const [textureWidth, textureHeight] = modelTextureSize;
+		// Create geometry
+		const boxGeometry = this.createBoxGeometry(boxJson);
+		if (!boxGeometry) return null;
 
+		// Set up UVs
+		this.setupBoxUVs(boxGeometry, boxJson, modelTextureSize, parentPartJson);
+
+		// Create material and mesh
+		const material = new THREE.MeshBasicMaterial({
+			map: texture,
+			alphaTest: 0.1,
+			transparent: true,
+			side: parentPartJson.mirror ? THREE.DoubleSide : THREE.FrontSide,
+		});
+
+		const boxMesh = new THREE.Mesh(boxGeometry, material);
+		const boxIndex = parentPartJson.boxes?.indexOf(boxJson) ?? "unknown";
+		boxMesh.name = `${parentPartJson.id || "part"}_box${boxIndex}`;
+
+		// Get box dimensions
+		let [originX, originY, originZ, sizeX, sizeY, sizeZ] =
+			this.calculateBoxDimensions(boxJson);
+
+		// Apply invertAxis transformations to match Blockbench's export logic
+		// This transforms coordinates based on the parent part's invertAxis setting
+		let invertX = false,
+			invertY = false,
+			invertZ = false;
+
+		if (parentPartJson.invertAxis) {
+			invertX = parentPartJson.invertAxis.includes("x");
+			invertY = parentPartJson.invertAxis.includes("y");
+			invertZ = parentPartJson.invertAxis.includes("z");
+		}
+
+		// Apply the inversion to the box coordinates
+		// When an axis is inverted, we need to flip both origin and account for size
+		if (invertX) {
+			originX = -originX - sizeX;
+		}
+		if (invertY) {
+			originY = -originY - sizeY;
+		}
+		if (invertZ) {
+			originZ = -originZ - sizeZ;
+		}
+
+		if (this.debug) {
+			console.log(
+				`Box ${boxMesh.name} (parent: ${parentPartJson.id}):`,
+				{
+					originalCoords: boxJson.coordinates,
+					invertedCoords: [originX, originY, originZ],
+					size: [sizeX, sizeY, sizeZ],
+					invertAxis: parentPartJson.invertAxis || "none",
+				},
+				{
+					invertX: invertX,
+					invertY: invertY,
+					invertZ: invertZ,
+					originX: originX,
+					originY: originY,
+					originZ: originZ,
+					sizeX: sizeX,
+					sizeY: sizeY,
+					sizeZ: sizeZ,
+				}
+			);
+		}
+
+		// Position the box mesh - converting from corner-based to center-based
+		boxMesh.position.set(
+			(originX + sizeX / 2) * this.mcScale,
+			(originY + sizeY / 2) * this.mcScale,
+			(originZ + sizeZ / 2) * this.mcScale
+		);
+
+		// Debug logging
+		if (this.debug) {
+			console.log(`Box ${boxMesh.name}:`, {
+				originalCoords: boxJson.coordinates,
+				afterInversion: [originX, originY, originZ, sizeX, sizeY, sizeZ],
+				finalPosition: boxMesh.position.toArray().map((v) => v.toFixed(3)),
+				parentInvertAxis: parentPartJson.invertAxis || "none",
+			});
+
+			this.addDebugWireframe(boxMesh);
+			this.addDebugOriginMarker(boxMesh, [originX, originY, originZ]);
+		}
+
+		return boxMesh;
+	}
+
+	/**
+	 * Adds a wireframe overlay to a box mesh for debugging
+	 */
+	private addDebugWireframe(boxMesh: THREE.Mesh): void {
+		// Create wireframe material
+		const wireframeMaterial = new THREE.LineBasicMaterial({
+			color: 0x00ff00, // Bright green for visibility
+			transparent: true,
+			opacity: 0.8,
+			depthTest: true,
+		});
+
+		// Create wireframe geometry from the box's geometry
+		const wireframeGeometry = new THREE.WireframeGeometry(boxMesh.geometry);
+
+		// Create and add the wireframe
+		const wireframe = new THREE.LineSegments(
+			wireframeGeometry,
+			wireframeMaterial
+		);
+		wireframe.name = `${boxMesh.name}_wireframe`;
+		boxMesh.add(wireframe);
+
+		// Make the original mesh semi-transparent to see inside
+		if (boxMesh.material instanceof THREE.MeshBasicMaterial) {
+			boxMesh.material.transparent = true;
+			boxMesh.material.opacity = 0.7;
+		}
+	}
+
+	/**
+	 * Adds a marker at the box's origin point for debugging
+	 */
+	private addDebugOriginMarker(
+		boxMesh: THREE.Mesh,
+		originCoords: [number, number, number]
+	): void {
+		const [originX, originY, originZ] = originCoords;
+
+		// Create a small sphere to mark the origin
+		const originGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+		const originMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red
+		const originMarker = new THREE.Mesh(originGeometry, originMaterial);
+
+		// Calculate the position relative to the box center
+		originMarker.position.set(
+			-boxMesh.position.x + originX * this.mcScale,
+			-boxMesh.position.y + originY * this.mcScale,
+			-boxMesh.position.z + originZ * this.mcScale
+		);
+
+		originMarker.name = `${boxMesh.name}_origin`;
+		boxMesh.add(originMarker);
+
+		// Optional: Add coordinate axes at the origin
+		this.addCoordinateAxes(boxMesh, originMarker.position);
+	}
+
+	/**
+	 * Adds RGB coordinate axes at a point for debugging
+	 */
+	private addCoordinateAxes(
+		parent: THREE.Object3D,
+		position: THREE.Vector3,
+		axisLength: number = 0.15
+	): void {
+		// X-axis (red)
+		const xGeometry = new THREE.BufferGeometry().setFromPoints([
+			new THREE.Vector3(0, 0, 0),
+			new THREE.Vector3(axisLength, 0, 0),
+		]);
+		const xMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
+		const xAxis = new THREE.Line(xGeometry, xMaterial);
+
+		// Y-axis (green)
+		const yGeometry = new THREE.BufferGeometry().setFromPoints([
+			new THREE.Vector3(0, 0, 0),
+			new THREE.Vector3(0, axisLength, 0),
+		]);
+		const yMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+		const yAxis = new THREE.Line(yGeometry, yMaterial);
+
+		// Z-axis (blue)
+		const zGeometry = new THREE.BufferGeometry().setFromPoints([
+			new THREE.Vector3(0, 0, 0),
+			new THREE.Vector3(0, 0, axisLength),
+		]);
+		const zMaterial = new THREE.LineBasicMaterial({ color: 0x0000ff });
+		const zAxis = new THREE.Line(zGeometry, zMaterial);
+
+		// Create a group for all axes
+		const axesGroup = new THREE.Group();
+		axesGroup.add(xAxis);
+		axesGroup.add(yAxis);
+		axesGroup.add(zAxis);
+
+		// Position the axes group
+		axesGroup.position.copy(position);
+		axesGroup.name = `${parent.name}_axes`;
+
+		parent.add(axesGroup);
+	}
+
+	private calculateBoxDimensions(
+		boxJson: MinecraftModelBox
+	): [number, number, number, number, number, number] {
 		let [originX, originY, originZ, sizeX, sizeY, sizeZ] = boxJson.coordinates;
 
-		const sizeAdd = boxJson.sizeAdd || 0;
-		if (sizeAdd !== 0) {
+		// Handle both sizeAdd (uniform) and sizesAdd (per-axis)
+		if (
+			"sizesAdd" in boxJson &&
+			Array.isArray(boxJson.sizesAdd) &&
+			boxJson.sizesAdd.length === 3
+		) {
+			const [xAdd, yAdd, zAdd] = boxJson.sizesAdd;
+			originX -= xAdd;
+			originY -= yAdd;
+			originZ -= zAdd;
+			sizeX += xAdd * 2;
+			sizeY += yAdd * 2;
+			sizeZ += zAdd * 2;
+		} else if (boxJson.sizeAdd) {
+			const sizeAdd = boxJson.sizeAdd || 0;
 			originX -= sizeAdd;
 			originY -= sizeAdd;
 			originZ -= sizeAdd;
@@ -290,22 +480,40 @@ export class EntityRenderer {
 			sizeZ += sizeAdd * 2;
 		}
 
+		return [originX, originY, originZ, sizeX, sizeY, sizeZ];
+	}
+
+	private createBoxGeometry(
+		boxJson: MinecraftModelBox
+	): THREE.BoxGeometry | null {
+		const [_, __, ___, sizeX, sizeY, sizeZ] =
+			this.calculateBoxDimensions(boxJson);
+
 		const finalSizeX = sizeX * this.mcScale;
 		const finalSizeY = sizeY * this.mcScale;
 		const finalSizeZ = sizeZ * this.mcScale;
 
 		if (finalSizeX <= 0 || finalSizeY <= 0 || finalSizeZ <= 0) {
 			if (this.debug)
-				console.warn(
-					`[EntityRenderer] Zero/negative size box for part "${parentPartJson.id}"`,
-					boxJson
-				);
+				console.warn(`[EntityRenderer] Zero/negative size box`, boxJson);
 			return null;
 		}
 
-		const boxGeom = new THREE.BoxGeometry(finalSizeX, finalSizeY, finalSizeZ);
-		// ... (UV attribute and mapping logic as before)
-		const uvAttribute = boxGeom.getAttribute("uv") as THREE.BufferAttribute;
+		return new THREE.BoxGeometry(finalSizeX, finalSizeY, finalSizeZ);
+	}
+
+	private setupBoxUVs(
+		boxGeometry: THREE.BoxGeometry,
+		boxJson: MinecraftModelBox,
+		modelTextureSize: [number, number],
+		parentPartJson: MinecraftModelPart
+	): void {
+		const [texU_offset, texV_offset] = boxJson.textureOffset;
+		const [textureWidth, textureHeight] = modelTextureSize;
+		const [_, __, ___, sizeX, sizeY, sizeZ] =
+			this.calculateBoxDimensions(boxJson);
+
+		const uvAttribute = boxGeometry.getAttribute("uv") as THREE.BufferAttribute;
 		const customFaceUVs: ([number, number, number, number] | undefined)[] = [
 			boxJson.uvEast,
 			boxJson.uvWest,
@@ -315,8 +523,10 @@ export class EntityRenderer {
 			boxJson.uvNorth,
 		];
 		const hasCustomUVs = customFaceUVs.some((uv) => uv !== undefined);
+
 		for (let i = 0; i < 6; i++) {
 			let u: number, v: number, w: number, h: number;
+
 			if (hasCustomUVs) {
 				const customUV = customFaceUVs[i];
 				if (customUV) {
@@ -329,7 +539,8 @@ export class EntityRenderer {
 						);
 				}
 			} else {
-				switch (i /* Standard MC UV layout */) {
+				// Standard Minecraft UV layout
+				switch (i) {
 					case 0:
 						[u, v, w, h] = [
 							texU_offset + sizeZ,
@@ -337,13 +548,13 @@ export class EntityRenderer {
 							sizeZ,
 							sizeY,
 						];
-						break;
+						break; // Right (+X)
 					case 1:
 						[u, v, w, h] = [texU_offset, texV_offset + sizeZ, sizeZ, sizeY];
-						break;
+						break; // Left (-X)
 					case 2:
 						[u, v, w, h] = [texU_offset + sizeZ, texV_offset, sizeX, sizeZ];
-						break;
+						break; // Top (+Y)
 					case 3:
 						[u, v, w, h] = [
 							texU_offset + sizeZ + sizeX,
@@ -351,7 +562,7 @@ export class EntityRenderer {
 							sizeX,
 							sizeZ,
 						];
-						break;
+						break; // Bottom (-Y)
 					case 4:
 						[u, v, w, h] = [
 							texU_offset + sizeZ + sizeX,
@@ -359,7 +570,7 @@ export class EntityRenderer {
 							sizeX,
 							sizeY,
 						];
-						break;
+						break; // Front (+Z)
 					case 5:
 						[u, v, w, h] = [
 							texU_offset + sizeZ + sizeX + sizeX,
@@ -367,13 +578,15 @@ export class EntityRenderer {
 							sizeX,
 							sizeY,
 						];
-						break;
+						break; // Back (-Z)
 					default:
 						[u, v, w, h] = [0, 0, 0, 0];
 						break;
 				}
 			}
+
 			if (w === 0 || h === 0) {
+				// Skip UV update for zero-area texture regions
 				const uvIdx = i * 4;
 				uvAttribute.setXY(uvIdx + 0, 0, 0);
 				uvAttribute.setXY(uvIdx + 1, 0, 0);
@@ -381,40 +594,18 @@ export class EntityRenderer {
 				uvAttribute.setXY(uvIdx + 3, 0, 0);
 				continue;
 			}
+
 			const u0 = u / textureWidth;
 			const v0 = v / textureHeight;
 			const u1 = (u + w) / textureWidth;
 			const v1 = (v + h) / textureHeight;
-			const uvIdx = i * 4;
+			const uvIdx = i * 4; // UV order for BoxGeometry faces: BR, BL, TR, TL
 			uvAttribute.setXY(uvIdx + 0, u1, v1);
 			uvAttribute.setXY(uvIdx + 1, u0, v1);
 			uvAttribute.setXY(uvIdx + 2, u1, v0);
 			uvAttribute.setXY(uvIdx + 3, u0, v0);
 		}
+
 		uvAttribute.needsUpdate = true;
-		// --- End of UV logic ---
-
-		const material = new THREE.MeshBasicMaterial({
-			map: texture,
-			alphaTest: 0.1,
-			transparent: true,
-			side: parentPartJson.mirror ? THREE.DoubleSide : THREE.FrontSide,
-		});
-
-		const boxMesh = new THREE.Mesh(boxGeom, material);
-		const boxIndex = parentPartJson.boxes?.indexOf(boxJson) ?? "unknown";
-		boxMesh.name = `${parentPartJson.id || "part"}_box${boxIndex}`;
-
-		// Position the box. BoxGeometry is centered at (0,0,0) in its local space.
-		// originX,Y,Z from the JSON is the "min corner" of the box *before* scaling,
-		// and it's relative to the part's pivot.
-		// So, the center of the box in the part's local space is:
-		boxMesh.position.set(
-			(originX + sizeX / 2) * this.mcScale,
-			(originY + sizeY / 2) * this.mcScale,
-			(originZ + sizeZ / 2) * this.mcScale
-		);
-
-		return boxMesh;
 	}
 }
