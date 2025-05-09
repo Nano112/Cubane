@@ -100,7 +100,7 @@ export class EntityRenderer {
 
 		const entityGroup = new THREE.Object3D();
 		entityGroup.name = entityName;
-		const modelIndexToShow = 1; // -1 means show all models
+		const modelIndexToShow = -1; // -1 means show all models
 		if (modelJson.models) {
 			if (modelIndexToShow < 0 || modelJson.models.length <= modelIndexToShow) {
 				for (const partJson of modelJson.models) {
@@ -133,64 +133,12 @@ export class EntityRenderer {
 		return entityGroup;
 	}
 
-	private createPartMeshRecursive(
-		partJson: MinecraftModelPart,
-		modelTextureSize: [number, number],
-		texture: THREE.Texture,
-		isRootPart: boolean
-	): THREE.Group {
-		// Create a pivot group first - this will be what gets positioned and rotated
-		const pivotGroup = new THREE.Group();
-		pivotGroup.name =
-			(partJson.id || partJson.part || "unnamed_part") + "_pivot";
-
-		// Create the part group that holds the actual geometry
-		const partGroup = new THREE.Group();
-		partGroup.name = partJson.id || partJson.part || "unnamed_part";
-
-		// Add the part group to the pivot group
-		pivotGroup.add(partGroup);
-
-		// Create and add boxes to the part group
-		if (partJson.boxes) {
-			for (const boxJson of partJson.boxes) {
-				const boxMesh = this.createBoxMesh(
-					boxJson,
-					modelTextureSize,
-					texture,
-					partJson
-				);
-				if (boxMesh) {
-					partGroup.add(boxMesh);
-				}
-			}
-		}
-
-		// Add submodels to the part group (not the pivot)
-		if (partJson.submodels) {
-			for (const subPartJson of partJson.submodels) {
-				const subPartPivot = this.createPartMeshRecursive(
-					subPartJson,
-					modelTextureSize,
-					texture,
-					false
-				);
-				partGroup.add(subPartPivot);
-			}
-		}
-
-		// Apply transforms to the pivot
-		this.applyPivotTransforms(pivotGroup, partJson, isRootPart);
-
-		return pivotGroup;
-	}
-
-	private applyPivotTransforms(
-		pivotGroup: THREE.Group,
+	private applyModelTransforms(
+		partGroup: THREE.Group,
 		partJson: MinecraftModelPart,
 		isRootPart: boolean
 	): void {
-		// Extract translation values and apply invertAxis
+		// Extract translation values
 		let pivotX_jem = 0,
 			pivotY_jem = 0,
 			pivotZ_jem = 0;
@@ -198,6 +146,7 @@ export class EntityRenderer {
 			[pivotX_jem, pivotY_jem, pivotZ_jem] = partJson.translate;
 		}
 
+		// Determine which axes to invert
 		let invertX = false,
 			invertY = false,
 			invertZ = false;
@@ -207,6 +156,7 @@ export class EntityRenderer {
 			invertZ = partJson.invertAxis.includes("z");
 		}
 
+		// Apply inversion to translation values
 		let translatedX = pivotX_jem;
 		let translatedY = pivotY_jem;
 		let translatedZ = pivotZ_jem;
@@ -215,39 +165,76 @@ export class EntityRenderer {
 		if (invertY) translatedY = -translatedY;
 		if (invertZ) translatedZ = -translatedZ;
 
-		// Set position
-		pivotGroup.position.set(
-			translatedX * this.mcScale,
-			translatedY * this.mcScale,
-			translatedZ * this.mcScale
-		);
+		// Apply translation (pivot position)
+		// partGroup.position.set(
+		// 	translatedX * this.mcScale,
+		// 	translatedY * this.mcScale,
+		// 	translatedZ * this.mcScale
+		// );
 
-		// Apply rotation to the pivot
+		// // Apply rotation - use the values directly from the model file
 		// if (partJson.rotate) {
-		// 	pivotGroup.rotation.set(
+		// 	partGroup.rotation.set(
 		// 		THREE.MathUtils.degToRad(partJson.rotate[0]),
 		// 		THREE.MathUtils.degToRad(partJson.rotate[1]),
-		// 		THREE.MathUtils.degToRad(partJson.rotate[2])
+		// 		THREE.MathUtils.degToRad(partJson.rotate[2]),
+		// 		"XYZ" // Standard rotation order
 		// 	);
 		// }
 
+		// Apply mirroring if needed
+		if (partJson.mirror) {
+			partGroup.scale.x = -1;
+		}
+	}
+
+	private createPartMeshRecursive(
+		partJson: MinecraftModelPart,
+		modelTextureSize: [number, number],
+		texture: THREE.Texture,
+		isRootPart: boolean
+	): THREE.Group {
+		const partGroup = new THREE.Group(); // Single group for this part
+		partGroup.name = partJson.id || partJson.part || "unnamed_part";
+
 		if (this.debug) {
-			//Show the center of the pivot
-			const pivotCenter = pivotGroup.position.clone();
-			const pivotSize = 0.05;
-			const pivotGeometry = new THREE.SphereGeometry(pivotSize, 8, 8);
-			const pivotMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-			const pivotMesh = new THREE.Mesh(pivotGeometry, pivotMaterial);
-			pivotMesh.position.copy(pivotCenter);
-			pivotMesh.name = `${pivotGroup.name}_center`;
-			pivotGroup.add(pivotMesh);
-			console.log(pivotGroup);
+			console.log(
+				`Creating part: ${partGroup.name}, matrixAutoUpdate initial: ${partGroup.matrixAutoUpdate}`
+			);
 		}
 
-		// Apply mirroring if needed (to the part group inside the pivot)
-		if (partJson.mirror && pivotGroup.children.length > 0) {
-			pivotGroup.children[0].scale.x = -1;
+		// Apply all transformations to the part group
+		this.applyModelTransforms(partGroup, partJson, isRootPart);
+
+		// Add boxes as children of this partGroup
+		if (partJson.boxes) {
+			for (const boxJson of partJson.boxes) {
+				const boxMesh = this.createBoxMesh(
+					boxJson,
+					modelTextureSize,
+					texture,
+					partJson
+				);
+				if (boxMesh) {
+					partGroup.add(boxMesh); // boxMesh.position is local to partGroup
+				}
+			}
 		}
+
+		// Add submodels as children of this partGroup
+		if (partJson.submodels) {
+			for (const subPartJson of partJson.submodels) {
+				const subPartGroup = this.createPartMeshRecursive(
+					subPartJson,
+					modelTextureSize,
+					texture,
+					false // Submodels are not root parts
+				);
+				partGroup.add(subPartGroup); // subPartGroup.position is local to this partGroup
+			}
+		}
+
+		return partGroup;
 	}
 
 	private createBoxMesh(
