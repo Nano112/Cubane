@@ -1,28 +1,30 @@
 import * as THREE from "three";
-import { EntityModelLoader } from "./EntityModelLoader"; // Assuming this is correct
+import { EntityModelLoader } from "./EntityModelLoader";
 
-// --- Interfaces (ensure these match your actual EntityModel structure) ---
-interface MinecraftEntityModel {
+// Type definitions for OptiFine JEM model format
+interface OptifineEntityModel {
 	textureSize: [number, number];
-	models: MinecraftModelPart[];
+	shadowSize?: number;
+	models: OptifineModelPart[];
 }
 
-interface MinecraftModelPart {
+interface OptifineModelPart {
 	part: string;
 	id: string;
-	invertAxis?: "xy" | "yz" | "xz" | string;
-	translate?: [number, number, number];
+	invertAxis?: string;
+	translate: [number, number, number];
 	rotate?: [number, number, number];
-	mirror?: boolean;
-	boxes?: MinecraftModelBox[];
-	submodels?: MinecraftModelPart[];
+	mirrorTexture?: string;
+	boxes?: OptifineModelBox[];
+	submodels?: OptifineModelPart[];
+	animations?: any[];
+	attach?: boolean;
 }
 
-interface MinecraftModelBox {
-	coordinates: [number, number, number, number, number, number];
-	textureOffset: [number, number];
+interface OptifineModelBox {
+	coordinates: [number, number, number, number, number, number]; // [x, y, z, width, height, depth]
+	textureOffset?: [number, number];
 	sizeAdd?: number;
-	sizesAdd?: [number, number, number];
 	uvNorth?: [number, number, number, number];
 	uvEast?: [number, number, number, number];
 	uvSouth?: [number, number, number, number];
@@ -37,562 +39,482 @@ export class EntityRenderer {
 	private debug: boolean = false;
 	private readonly mcScale: number = 1 / 16; // Minecraft pixels to Three.js units
 
-	constructor(entityModelLoader: EntityModelLoader, debug: boolean = true) {
+	constructor(entityModelLoader: EntityModelLoader, debug: boolean = false) {
 		this.entityModelLoader = entityModelLoader;
 		this.textureLoader = new THREE.TextureLoader();
 		this.debug = debug;
-		if (this.debug) {
-			console.log("[EntityRenderer] Debug mode enabled.");
-			console.log("[EntityRenderer] mcScale:", this.mcScale);
-			console.log(
-				"[EntityRenderer] THREE.Object3D.DEFAULT_MATRIX_AUTO_UPDATE:",
-				THREE.Object3D.DEFAULT_MATRIX_AUTO_UPDATE
-			);
-		}
 	}
 
+	/**
+	 * Create a THREE.js mesh for the given entity
+	 */
 	public async createEntityMesh(
 		entityName: string
 	): Promise<THREE.Object3D | null> {
+		// Get model and texture data
 		const entityData = this.entityModelLoader.getEntityData(entityName);
 
 		if (!entityData.model) {
-			if (this.debug)
-				console.warn(`[EntityRenderer] No model data for ${entityName}`);
-			return null;
-		}
-		const modelJson = entityData.model as unknown as MinecraftEntityModel;
-
-		if (!entityData.texture) {
-			if (this.debug)
-				console.warn(`[EntityRenderer] No texture data for ${entityName}`);
-			return null;
-		}
-		const textureBase64 = entityData.texture;
-
-		let texture: THREE.Texture;
-		try {
-			const dataUri = textureBase64.startsWith("data:image/")
-				? textureBase64
-				: `data:image/png;base64,${textureBase64}`;
-			texture = await new Promise<THREE.Texture>((resolve, reject) => {
-				this.textureLoader.load(
-					dataUri,
-					(loadedTexture) => {
-						loadedTexture.magFilter = THREE.NearestFilter;
-						loadedTexture.minFilter = THREE.NearestMipmapNearestFilter;
-						loadedTexture.flipY = false;
-						resolve(loadedTexture);
-					},
-					undefined,
-					(errorEvent) => {
-						console.error(
-							`[EntityRenderer] Failed to load texture for "${entityName}"`,
-							errorEvent
-						);
-						reject(new Error(`Texture load failed for ${entityName}`));
-					}
-				);
-			});
-		} catch (error) {
+			console.error(`Failed to load model for ${entityName}`);
 			return null;
 		}
 
-		const entityGroup = new THREE.Object3D();
+		const modelJson = entityData.model as unknown as OptifineEntityModel;
+
+		// Create parent group for the entire entity
+		const entityGroup = new THREE.Group();
 		entityGroup.name = entityName;
-		const modelIndexToShow = -1; // -1 means show all models
-		if (modelJson.models) {
-			if (modelIndexToShow < 0 || modelJson.models.length <= modelIndexToShow) {
-				for (const partJson of modelJson.models) {
-					const partGroup = this.createPartMeshRecursive(
-						partJson,
-						modelJson.textureSize,
-						texture,
-						true
+
+		// Load the texture from base64
+		let texture: THREE.Texture | null = null;
+		if (entityData.texture) {
+			try {
+				const dataUri = entityData.texture.startsWith("data:image/")
+					? entityData.texture
+					: `data:image/png;base64,${entityData.texture}`;
+
+				texture = await new Promise<THREE.Texture>((resolve, reject) => {
+					this.textureLoader.load(
+						dataUri,
+						(loadedTexture) => {
+							loadedTexture.magFilter = THREE.NearestFilter;
+							loadedTexture.minFilter = THREE.NearestMipmapNearestFilter;
+							loadedTexture.flipY = false;
+							resolve(loadedTexture);
+						},
+						undefined,
+						(error) => {
+							console.error(`Failed to load texture for ${entityName}:`, error);
+							reject(error);
+						}
 					);
-					entityGroup.add(partGroup);
-				}
-			} else {
-				//only do the first part for now
-				const partJson = modelJson.models[modelIndexToShow];
-				const partGroup = this.createPartMeshRecursive(
-					partJson,
-					modelJson.textureSize,
-					texture,
-					true
-				);
-				entityGroup.add(partGroup);
+				});
+			} catch (error) {
+				console.error(`Error loading texture for ${entityName}:`, error);
+
+				// Create a fallback texture - gray checkerboard
+				texture = this.createFallbackTexture();
 			}
 		} else {
-			if (this.debug)
-				console.warn(
-					`[EntityRenderer] Model for "${entityName}" has no "models" array.`
-				);
+			console.warn(`No texture found for ${entityName}, using fallback`);
+			texture = this.createFallbackTexture();
+		}
+
+		// Create material with the texture
+		const material = new THREE.MeshStandardMaterial({
+			map: texture,
+			transparent: true,
+			side: THREE.DoubleSide,
+			alphaTest: 0.1,
+		});
+
+		// Process each model part
+		if (modelJson.models && Array.isArray(modelJson.models)) {
+			for (const partJson of modelJson.models) {
+				try {
+					const partGroup = this.createModelPart(
+						partJson,
+						modelJson.textureSize,
+						material
+					);
+					if (partGroup) {
+						entityGroup.add(partGroup);
+					}
+				} catch (error) {
+					console.error(
+						`Error creating part ${partJson.id || partJson.part}:`,
+						error
+					);
+				}
+			}
+		} else {
+			console.warn(`Model for ${entityName} has no "models" array`);
+		}
+
+		// Scale the entity to match Minecraft's scale
+		entityGroup.scale.set(this.mcScale, this.mcScale, this.mcScale);
+
+		// Add debug helpers if enabled
+		if (this.debug) {
+			const axesHelper = new THREE.AxesHelper(16);
+			entityGroup.add(axesHelper);
 		}
 
 		return entityGroup;
 	}
 
-	private applyModelTransforms(
-		partGroup: THREE.Group,
-		partJson: MinecraftModelPart,
-		isRootPart: boolean
-	): void {
-		// Extract translation values
-		let pivotX_jem = 0,
-			pivotY_jem = 0,
-			pivotZ_jem = 0;
-		if (partJson.translate) {
-			[pivotX_jem, pivotY_jem, pivotZ_jem] = partJson.translate;
+	/**
+	 * Create a fallback texture (checkerboard pattern)
+	 */
+	private createFallbackTexture(): THREE.Texture {
+		const size = 16;
+		const canvas = document.createElement("canvas");
+		canvas.width = size * 2;
+		canvas.height = size * 2;
+
+		const ctx = canvas.getContext("2d");
+		if (ctx) {
+			ctx.fillStyle = "#888888";
+			ctx.fillRect(0, 0, size * 2, size * 2);
+
+			ctx.fillStyle = "#AAAAAA";
+			ctx.fillRect(0, 0, size, size);
+			ctx.fillRect(size, size, size, size);
 		}
 
-		// Determine which axes to invert
-		let invertX = false,
-			invertY = false,
-			invertZ = false;
-		if (partJson.invertAxis) {
-			invertX = partJson.invertAxis.includes("x");
-			invertY = partJson.invertAxis.includes("y");
-			invertZ = partJson.invertAxis.includes("z");
-		}
-
-		// Apply inversion to translation values
-		let translatedX = pivotX_jem;
-		let translatedY = pivotY_jem;
-		let translatedZ = pivotZ_jem;
-
-		if (invertX) translatedX = -translatedX;
-		if (invertY) translatedY = -translatedY;
-		if (invertZ) translatedZ = -translatedZ;
-
-		// Apply translation (pivot position)
-		// partGroup.position.set(
-		// 	translatedX * this.mcScale,
-		// 	translatedY * this.mcScale,
-		// 	translatedZ * this.mcScale
-		// );
-
-		// // Apply rotation - use the values directly from the model file
-		// if (partJson.rotate) {
-		// 	partGroup.rotation.set(
-		// 		THREE.MathUtils.degToRad(partJson.rotate[0]),
-		// 		THREE.MathUtils.degToRad(partJson.rotate[1]),
-		// 		THREE.MathUtils.degToRad(partJson.rotate[2]),
-		// 		"XYZ" // Standard rotation order
-		// 	);
-		// }
-
-		// Apply mirroring if needed
-		if (partJson.mirror) {
-			partGroup.scale.x = -1;
-		}
+		const texture = new THREE.CanvasTexture(canvas);
+		texture.magFilter = THREE.NearestFilter;
+		texture.minFilter = THREE.NearestFilter;
+		return texture;
 	}
 
-	private createPartMeshRecursive(
-		partJson: MinecraftModelPart,
-		modelTextureSize: [number, number],
-		texture: THREE.Texture,
-		isRootPart: boolean
+	/**
+	 * Create a THREE.js group for a model part
+	 */
+	private createModelPart(
+		part: OptifineModelPart,
+		textureSize: [number, number],
+		material: THREE.Material
 	): THREE.Group {
-		const partGroup = new THREE.Group(); // Single group for this part
-		partGroup.name = partJson.id || partJson.part || "unnamed_part";
+		// Create a group for this part
+		const group = new THREE.Group();
+		group.name = part.id || part.part || "unknown";
 
-		if (this.debug) {
-			console.log(
-				`Creating part: ${partGroup.name}, matrixAutoUpdate initial: ${partGroup.matrixAutoUpdate}`
-			);
+		// Process inversion settings from invertAxis
+		const invertX = part.invertAxis?.includes("x") ?? true;
+		const invertY = part.invertAxis?.includes("y") ?? true;
+		const invertZ = part.invertAxis?.includes("z") ?? false;
+
+		// Apply translations - invert axes as specified in model
+		const translateX = part.translate[0] * (invertX ? -1 : 1);
+		const translateY = part.translate[1] * (invertY ? -1 : 1);
+		const translateZ = part.translate[2] * (invertZ ? -1 : 1);
+
+		group.position.set(translateX, translateY, translateZ);
+
+		// Apply rotations (converting from degrees to radians)
+		if (part.rotate) {
+			const rotX = THREE.MathUtils.degToRad(part.rotate[0]);
+			const rotY = THREE.MathUtils.degToRad(part.rotate[1]);
+			const rotZ = THREE.MathUtils.degToRad(part.rotate[2]);
+			group.rotation.set(rotX, rotY, rotZ);
 		}
 
-		// Apply all transformations to the part group
-		this.applyModelTransforms(partGroup, partJson, isRootPart);
-
-		// Add boxes as children of this partGroup
-		if (partJson.boxes) {
-			for (const boxJson of partJson.boxes) {
-				const boxMesh = this.createBoxMesh(
-					boxJson,
-					modelTextureSize,
-					texture,
-					partJson
-				);
-				if (boxMesh) {
-					partGroup.add(boxMesh); // boxMesh.position is local to partGroup
+		// Process boxes in this part
+		if (part.boxes && Array.isArray(part.boxes)) {
+			for (const box of part.boxes) {
+				try {
+					const boxMesh = this.createBox(box, textureSize, material, part);
+					if (boxMesh) {
+						group.add(boxMesh);
+					}
+				} catch (error) {
+					console.error(
+						`Error creating box in part ${part.id || part.part}:`,
+						error
+					);
 				}
 			}
 		}
 
-		// Add submodels as children of this partGroup
-		if (partJson.submodels) {
-			for (const subPartJson of partJson.submodels) {
-				const subPartGroup = this.createPartMeshRecursive(
-					subPartJson,
-					modelTextureSize,
-					texture,
-					false // Submodels are not root parts
-				);
-				partGroup.add(subPartGroup); // subPartGroup.position is local to this partGroup
+		// Process submodels recursively
+		if (part.submodels && Array.isArray(part.submodels)) {
+			for (const submodel of part.submodels) {
+				try {
+					const subGroup = this.createModelPart(
+						submodel,
+						textureSize,
+						material
+					);
+					group.add(subGroup);
+				} catch (error) {
+					console.error(
+						`Error creating submodel in part ${part.id || part.part}:`,
+						error
+					);
+				}
 			}
 		}
 
-		return partGroup;
+		return group;
 	}
 
-	private createBoxMesh(
-		boxJson: MinecraftModelBox,
-		modelTextureSize: [number, number],
-		texture: THREE.Texture,
-		parentPartJson: MinecraftModelPart
+	/**
+	 * Create a THREE.js mesh for a model box
+	 */
+	private createBox(
+		box: OptifineModelBox,
+		textureSize: [number, number],
+		material: THREE.Material,
+		parentPart: OptifineModelPart
 	): THREE.Mesh | null {
-		// Create geometry
-		const boxGeometry = this.createBoxGeometry(boxJson);
-		if (!boxGeometry) return null;
+		if (!box || !box.coordinates) return null;
 
-		// Set up UVs
-		this.setupBoxUVs(boxGeometry, boxJson, modelTextureSize, parentPartJson);
+		const [x, y, z, width, height, depth] = box.coordinates;
 
-		// Create material and mesh
-		const material = new THREE.MeshBasicMaterial({
-			map: texture,
-			alphaTest: 0.1,
-			transparent: true,
-			side: parentPartJson.mirror ? THREE.DoubleSide : THREE.FrontSide,
-		});
-
-		const boxMesh = new THREE.Mesh(boxGeometry, material);
-		const boxIndex = parentPartJson.boxes?.indexOf(boxJson) ?? "unknown";
-		boxMesh.name = `${parentPartJson.id || "part"}_box${boxIndex}`;
-
-		// Get box dimensions
-		let [originX, originY, originZ, sizeX, sizeY, sizeZ] =
-			this.calculateBoxDimensions(boxJson);
-
-		// Apply invertAxis transformations to match Blockbench's export logic
-		// This transforms coordinates based on the parent part's invertAxis setting
-		let invertX = false,
-			invertY = false,
-			invertZ = false;
-
-		if (parentPartJson.invertAxis) {
-			invertX = parentPartJson.invertAxis.includes("x");
-			invertY = parentPartJson.invertAxis.includes("y");
-			invertZ = parentPartJson.invertAxis.includes("z");
-		}
-
-		// Apply the inversion to the box coordinates
-		// When an axis is inverted, we need to flip both origin and account for size
-		if (invertX) {
-			originX = -originX - sizeX;
-		}
-		if (invertY) {
-			originY = -originY - sizeY;
-		}
-		if (invertZ) {
-			originZ = -originZ - sizeZ;
-		}
-
-		if (this.debug) {
-			console.log(
-				`Box ${boxMesh.name} (parent: ${parentPartJson.id}):`,
-				{
-					originalCoords: boxJson.coordinates,
-					invertedCoords: [originX, originY, originZ],
-					size: [sizeX, sizeY, sizeZ],
-					invertAxis: parentPartJson.invertAxis || "none",
-				},
-				{
-					invertX: invertX,
-					invertY: invertY,
-					invertZ: invertZ,
-					originX: originX,
-					originY: originY,
-					originZ: originZ,
-					sizeX: sizeX,
-					sizeY: sizeY,
-					sizeZ: sizeZ,
-				}
-			);
-		}
-
-		// Position the box mesh - converting from corner-based to center-based
-		boxMesh.position.set(
-			(originX + sizeX / 2) * this.mcScale,
-			(originY + sizeY / 2) * this.mcScale,
-			(originZ + sizeZ / 2) * this.mcScale
-		);
-
-		// Debug logging
-		if (this.debug) {
-			console.log(`Box ${boxMesh.name}:`, {
-				originalCoords: boxJson.coordinates,
-				afterInversion: [originX, originY, originZ, sizeX, sizeY, sizeZ],
-				finalPosition: boxMesh.position.toArray().map((v) => v.toFixed(3)),
-				parentInvertAxis: parentPartJson.invertAxis || "none",
-			});
-
-			this.addDebugWireframe(boxMesh);
-			this.addDebugOriginMarker(boxMesh, [originX, originY, originZ]);
-		}
-
-		return boxMesh;
-	}
-
-	/**
-	 * Adds a wireframe overlay to a box mesh for debugging
-	 */
-	private addDebugWireframe(boxMesh: THREE.Mesh): void {
-		// Create wireframe material
-		const wireframeMaterial = new THREE.LineBasicMaterial({
-			color: 0x00ff00, // Bright green for visibility
-			transparent: true,
-			opacity: 0.8,
-			depthTest: true,
-		});
-
-		// Create wireframe geometry from the box's geometry
-		const wireframeGeometry = new THREE.WireframeGeometry(boxMesh.geometry);
-
-		// Create and add the wireframe
-		const wireframe = new THREE.LineSegments(
-			wireframeGeometry,
-			wireframeMaterial
-		);
-		wireframe.name = `${boxMesh.name}_wireframe`;
-		boxMesh.add(wireframe);
-
-		// Make the original mesh semi-transparent to see inside
-		if (boxMesh.material instanceof THREE.MeshBasicMaterial) {
-			boxMesh.material.transparent = true;
-			boxMesh.material.opacity = 0.7;
-		}
-	}
-
-	/**
-	 * Adds a marker at the box's origin point for debugging
-	 */
-	private addDebugOriginMarker(
-		boxMesh: THREE.Mesh,
-		originCoords: [number, number, number]
-	): void {
-		const [originX, originY, originZ] = originCoords;
-
-		// Create a small sphere to mark the origin
-		const originGeometry = new THREE.SphereGeometry(0.05, 8, 8);
-		const originMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red
-		const originMarker = new THREE.Mesh(originGeometry, originMaterial);
-
-		// Calculate the position relative to the box center
-		originMarker.position.set(
-			-boxMesh.position.x + originX * this.mcScale,
-			-boxMesh.position.y + originY * this.mcScale,
-			-boxMesh.position.z + originZ * this.mcScale
-		);
-
-		originMarker.name = `${boxMesh.name}_origin`;
-		boxMesh.add(originMarker);
-
-		// Optional: Add coordinate axes at the origin
-		this.addCoordinateAxes(boxMesh, originMarker.position);
-	}
-
-	/**
-	 * Adds RGB coordinate axes at a point for debugging
-	 */
-	private addCoordinateAxes(
-		parent: THREE.Object3D,
-		position: THREE.Vector3,
-		axisLength: number = 0.15
-	): void {
-		// X-axis (red)
-		const xGeometry = new THREE.BufferGeometry().setFromPoints([
-			new THREE.Vector3(0, 0, 0),
-			new THREE.Vector3(axisLength, 0, 0),
-		]);
-		const xMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
-		const xAxis = new THREE.Line(xGeometry, xMaterial);
-
-		// Y-axis (green)
-		const yGeometry = new THREE.BufferGeometry().setFromPoints([
-			new THREE.Vector3(0, 0, 0),
-			new THREE.Vector3(0, axisLength, 0),
-		]);
-		const yMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
-		const yAxis = new THREE.Line(yGeometry, yMaterial);
-
-		// Z-axis (blue)
-		const zGeometry = new THREE.BufferGeometry().setFromPoints([
-			new THREE.Vector3(0, 0, 0),
-			new THREE.Vector3(0, 0, axisLength),
-		]);
-		const zMaterial = new THREE.LineBasicMaterial({ color: 0x0000ff });
-		const zAxis = new THREE.Line(zGeometry, zMaterial);
-
-		// Create a group for all axes
-		const axesGroup = new THREE.Group();
-		axesGroup.add(xAxis);
-		axesGroup.add(yAxis);
-		axesGroup.add(zAxis);
-
-		// Position the axes group
-		axesGroup.position.copy(position);
-		axesGroup.name = `${parent.name}_axes`;
-
-		parent.add(axesGroup);
-	}
-
-	private calculateBoxDimensions(
-		boxJson: MinecraftModelBox
-	): [number, number, number, number, number, number] {
-		let [originX, originY, originZ, sizeX, sizeY, sizeZ] = boxJson.coordinates;
-
-		// Handle both sizeAdd (uniform) and sizesAdd (per-axis)
-		if (
-			"sizesAdd" in boxJson &&
-			Array.isArray(boxJson.sizesAdd) &&
-			boxJson.sizesAdd.length === 3
-		) {
-			const [xAdd, yAdd, zAdd] = boxJson.sizesAdd;
-			originX -= xAdd;
-			originY -= yAdd;
-			originZ -= zAdd;
-			sizeX += xAdd * 2;
-			sizeY += yAdd * 2;
-			sizeZ += zAdd * 2;
-		} else if (boxJson.sizeAdd) {
-			const sizeAdd = boxJson.sizeAdd || 0;
-			originX -= sizeAdd;
-			originY -= sizeAdd;
-			originZ -= sizeAdd;
-			sizeX += sizeAdd * 2;
-			sizeY += sizeAdd * 2;
-			sizeZ += sizeAdd * 2;
-		}
-
-		return [originX, originY, originZ, sizeX, sizeY, sizeZ];
-	}
-
-	private createBoxGeometry(
-		boxJson: MinecraftModelBox
-	): THREE.BoxGeometry | null {
-		const [_, __, ___, sizeX, sizeY, sizeZ] =
-			this.calculateBoxDimensions(boxJson);
-
-		const finalSizeX = sizeX * this.mcScale;
-		const finalSizeY = sizeY * this.mcScale;
-		const finalSizeZ = sizeZ * this.mcScale;
-
-		if (finalSizeX <= 0 || finalSizeY <= 0 || finalSizeZ <= 0) {
-			if (this.debug)
-				console.warn(`[EntityRenderer] Zero/negative size box`, boxJson);
+		// Skip boxes with invalid dimensions
+		if (width <= 0 || height <= 0 || depth <= 0) {
+			console.warn(`Invalid box dimensions: [${width}, ${height}, ${depth}]`);
 			return null;
 		}
 
-		return new THREE.BoxGeometry(finalSizeX, finalSizeY, finalSizeZ);
-	}
+		// Create box geometry
+		const geometry = new THREE.BoxGeometry(width, height, depth);
 
-	private setupBoxUVs(
-		boxGeometry: THREE.BoxGeometry,
-		boxJson: MinecraftModelBox,
-		modelTextureSize: [number, number],
-		parentPartJson: MinecraftModelPart
-	): void {
-		const [texU_offset, texV_offset] = boxJson.textureOffset;
-		const [textureWidth, textureHeight] = modelTextureSize;
-		const [_, __, ___, sizeX, sizeY, sizeZ] =
-			this.calculateBoxDimensions(boxJson);
+		// Check for mirror settings
+		const mirrorU = parentPart.mirrorTexture?.includes("u") ?? false;
 
-		const uvAttribute = boxGeometry.getAttribute("uv") as THREE.BufferAttribute;
-		const customFaceUVs: ([number, number, number, number] | undefined)[] = [
-			boxJson.uvEast,
-			boxJson.uvWest,
-			boxJson.uvUp,
-			boxJson.uvDown,
-			boxJson.uvSouth,
-			boxJson.uvNorth,
-		];
-		const hasCustomUVs = customFaceUVs.some((uv) => uv !== undefined);
-
-		for (let i = 0; i < 6; i++) {
-			let u: number, v: number, w: number, h: number;
-
-			if (hasCustomUVs) {
-				const customUV = customFaceUVs[i];
-				if (customUV) {
-					[u, v, w, h] = customUV;
-				} else {
-					[u, v, w, h] = [0, 0, 0, 0];
-					if (this.debug)
-						console.warn(
-							`[EntityRenderer] Missing custom UV for face ${i} on box in part "${parentPartJson.id}".`
-						);
-				}
-			} else {
-				// Standard Minecraft UV layout
-				switch (i) {
-					case 0:
-						[u, v, w, h] = [
-							texU_offset + sizeZ,
-							texV_offset + sizeZ,
-							sizeZ,
-							sizeY,
-						];
-						break; // Right (+X)
-					case 1:
-						[u, v, w, h] = [texU_offset, texV_offset + sizeZ, sizeZ, sizeY];
-						break; // Left (-X)
-					case 2:
-						[u, v, w, h] = [texU_offset + sizeZ, texV_offset, sizeX, sizeZ];
-						break; // Top (+Y)
-					case 3:
-						[u, v, w, h] = [
-							texU_offset + sizeZ + sizeX,
-							texV_offset,
-							sizeX,
-							sizeZ,
-						];
-						break; // Bottom (-Y)
-					case 4:
-						[u, v, w, h] = [
-							texU_offset + sizeZ + sizeX,
-							texV_offset + sizeZ,
-							sizeX,
-							sizeY,
-						];
-						break; // Front (+Z)
-					case 5:
-						[u, v, w, h] = [
-							texU_offset + sizeZ + sizeX + sizeX,
-							texV_offset + sizeZ,
-							sizeX,
-							sizeY,
-						];
-						break; // Back (-Z)
-					default:
-						[u, v, w, h] = [0, 0, 0, 0];
-						break;
-				}
-			}
-
-			if (w === 0 || h === 0) {
-				// Skip UV update for zero-area texture regions
-				const uvIdx = i * 4;
-				uvAttribute.setXY(uvIdx + 0, 0, 0);
-				uvAttribute.setXY(uvIdx + 1, 0, 0);
-				uvAttribute.setXY(uvIdx + 2, 0, 0);
-				uvAttribute.setXY(uvIdx + 3, 0, 0);
-				continue;
-			}
-
-			const u0 = u / textureWidth;
-			const v0 = v / textureHeight;
-			const u1 = (u + w) / textureWidth;
-			const v1 = (v + h) / textureHeight;
-			const uvIdx = i * 4; // UV order for BoxGeometry faces: BR, BL, TR, TL
-			uvAttribute.setXY(uvIdx + 0, u1, v1);
-			uvAttribute.setXY(uvIdx + 1, u0, v1);
-			uvAttribute.setXY(uvIdx + 2, u1, v0);
-			uvAttribute.setXY(uvIdx + 3, u0, v0);
+		// Apply appropriate UV mapping
+		if (box.textureOffset) {
+			// Box UV mapping (Minecraft-style)
+			this.applyBoxUV(
+				geometry,
+				box.textureOffset,
+				[width, height, depth],
+				textureSize,
+				mirrorU
+			);
+		} else if (
+			box.uvNorth ||
+			box.uvEast ||
+			box.uvSouth ||
+			box.uvWest ||
+			box.uvUp ||
+			box.uvDown
+		) {
+			// Face UV mapping (per-face UVs)
+			this.applyFaceUV(geometry, box, textureSize, mirrorU);
 		}
 
-		uvAttribute.needsUpdate = true;
+		// Create mesh and position it
+		const mesh = new THREE.Mesh(geometry, material.clone());
+		mesh.position.set(x + width / 2, y + height / 2, z + depth / 2);
+
+		// Apply inflation (sizeAdd) if specified
+		if (typeof box.sizeAdd === "number" && box.sizeAdd !== 0) {
+			// Scale the box from its center
+			const inflation = box.sizeAdd / Math.min(width, height, depth);
+			mesh.scale.set(1 + inflation, 1 + inflation, 1 + inflation);
+		}
+
+		// Add debug wireframe if debug is enabled
+		if (this.debug) {
+			const wireframe = new THREE.LineSegments(
+				new THREE.WireframeGeometry(geometry),
+				new THREE.LineBasicMaterial({
+					color: 0x00ff00,
+					transparent: true,
+					opacity: 0.5,
+				})
+			);
+			mesh.add(wireframe);
+		}
+
+		return mesh;
+	}
+
+	/**
+	 * Apply Minecraft-style box UV mapping to a geometry
+	 */
+	private applyBoxUV(
+		geometry: THREE.BoxGeometry,
+		textureOffset: [number, number],
+		size: [number, number, number],
+		textureSize: [number, number],
+		mirrorU: boolean
+	): void {
+		const [u, v] = textureOffset;
+		const [width, height, depth] = size;
+		const [texWidth, texHeight] = textureSize;
+
+		// Get UV attribute for modification
+		const uvAttribute = geometry.attributes.uv as THREE.BufferAttribute;
+		const uvArray = new Float32Array(uvAttribute.array.length);
+
+		// Helper function to normalize texture coordinates
+		const normalizeU = (u: number) =>
+			mirrorU ? 1 - u / texWidth : u / texWidth;
+		const normalizeV = (v: number) => v / texHeight;
+
+		// UV mapping for each face following Minecraft's box UV layout
+		// Face order in THREE.js BoxGeometry: +X (right), -X (left), +Y (top), -Y (bottom), +Z (front), -Z (back)
+
+		// Right/East face (+X)
+		let faceIdx = 0;
+		uvArray[faceIdx * 8 + 0] = normalizeU(u + depth);
+		uvArray[faceIdx * 8 + 1] = normalizeV(v + depth + height);
+		uvArray[faceIdx * 8 + 2] = normalizeU(u + depth + width);
+		uvArray[faceIdx * 8 + 3] = normalizeV(v + depth + height);
+		uvArray[faceIdx * 8 + 4] = normalizeU(u + depth);
+		uvArray[faceIdx * 8 + 5] = normalizeV(v + depth);
+		uvArray[faceIdx * 8 + 6] = normalizeU(u + depth + width);
+		uvArray[faceIdx * 8 + 7] = normalizeV(v + depth);
+
+		// Left/West face (-X)
+		faceIdx = 1;
+		uvArray[faceIdx * 8 + 0] = normalizeU(u + depth * 2 + width);
+		uvArray[faceIdx * 8 + 1] = normalizeV(v + depth + height);
+		uvArray[faceIdx * 8 + 2] = normalizeU(u + depth * 2 + width * 2);
+		uvArray[faceIdx * 8 + 3] = normalizeV(v + depth + height);
+		uvArray[faceIdx * 8 + 4] = normalizeU(u + depth * 2 + width);
+		uvArray[faceIdx * 8 + 5] = normalizeV(v + depth);
+		uvArray[faceIdx * 8 + 6] = normalizeU(u + depth * 2 + width * 2);
+		uvArray[faceIdx * 8 + 7] = normalizeV(v + depth);
+
+		// Top/Up face (+Y)
+		faceIdx = 2;
+		uvArray[faceIdx * 8 + 0] = normalizeU(u + depth);
+		uvArray[faceIdx * 8 + 1] = normalizeV(v);
+		uvArray[faceIdx * 8 + 2] = normalizeU(u + depth + width);
+		uvArray[faceIdx * 8 + 3] = normalizeV(v);
+		uvArray[faceIdx * 8 + 4] = normalizeU(u + depth);
+		uvArray[faceIdx * 8 + 5] = normalizeV(v + depth);
+		uvArray[faceIdx * 8 + 6] = normalizeU(u + depth + width);
+		uvArray[faceIdx * 8 + 7] = normalizeV(v + depth);
+
+		// Bottom/Down face (-Y)
+		faceIdx = 3;
+		uvArray[faceIdx * 8 + 0] = normalizeU(u + depth + width);
+		uvArray[faceIdx * 8 + 1] = normalizeV(v + depth);
+		uvArray[faceIdx * 8 + 2] = normalizeU(u + depth + width * 2);
+		uvArray[faceIdx * 8 + 3] = normalizeV(v + depth);
+		uvArray[faceIdx * 8 + 4] = normalizeU(u + depth + width);
+		uvArray[faceIdx * 8 + 5] = normalizeV(v + depth * 2);
+		uvArray[faceIdx * 8 + 6] = normalizeU(u + depth + width * 2);
+		uvArray[faceIdx * 8 + 7] = normalizeV(v + depth * 2);
+
+		// Front/South face (+Z)
+		faceIdx = 4;
+		uvArray[faceIdx * 8 + 0] = normalizeU(u + depth * 2 + width);
+		uvArray[faceIdx * 8 + 1] = normalizeV(v + depth + height);
+		uvArray[faceIdx * 8 + 2] = normalizeU(u + depth + width);
+		uvArray[faceIdx * 8 + 3] = normalizeV(v + depth + height);
+		uvArray[faceIdx * 8 + 4] = normalizeU(u + depth * 2 + width);
+		uvArray[faceIdx * 8 + 5] = normalizeV(v + depth);
+		uvArray[faceIdx * 8 + 6] = normalizeU(u + depth + width);
+		uvArray[faceIdx * 8 + 7] = normalizeV(v + depth);
+
+		// Back/North face (-Z)
+		faceIdx = 5;
+		uvArray[faceIdx * 8 + 0] = normalizeU(u);
+		uvArray[faceIdx * 8 + 1] = normalizeV(v + depth + height);
+		uvArray[faceIdx * 8 + 2] = normalizeU(u + depth);
+		uvArray[faceIdx * 8 + 3] = normalizeV(v + depth + height);
+		uvArray[faceIdx * 8 + 4] = normalizeU(u);
+		uvArray[faceIdx * 8 + 5] = normalizeV(v + depth);
+		uvArray[faceIdx * 8 + 6] = normalizeU(u + depth);
+		uvArray[faceIdx * 8 + 7] = normalizeV(v + depth);
+
+		// Update the geometry's UV attribute
+		geometry.setAttribute("uv", new THREE.BufferAttribute(uvArray, 2));
+	}
+
+	/**
+	 * Apply per-face UV mapping to a geometry
+	 */
+	private applyFaceUV(
+		geometry: THREE.BoxGeometry,
+		box: OptifineModelBox,
+		textureSize: [number, number],
+		mirrorU: boolean
+	): void {
+		const [texWidth, texHeight] = textureSize;
+
+		// Get UV attribute for modification
+		const uvAttribute = geometry.attributes.uv as THREE.BufferAttribute;
+		const uvArray = new Float32Array(uvAttribute.array.length);
+
+		// Copy existing UVs as default
+		for (let i = 0; i < uvAttribute.array.length; i++) {
+			uvArray[i] = uvAttribute.array[i];
+		}
+
+		// Helper function to normalize texture coordinates
+		const normalizeU = (u: number) =>
+			mirrorU ? 1 - u / texWidth : u / texWidth;
+		const normalizeV = (v: number) => v / texHeight;
+
+		// Apply UVs for each face if provided
+
+		// East face (+X) - face index 0
+		if (box.uvEast) {
+			const faceIdx = 0;
+			uvArray[faceIdx * 8 + 0] = normalizeU(box.uvEast[0]);
+			uvArray[faceIdx * 8 + 1] = normalizeV(box.uvEast[3]);
+			uvArray[faceIdx * 8 + 2] = normalizeU(box.uvEast[2]);
+			uvArray[faceIdx * 8 + 3] = normalizeV(box.uvEast[3]);
+			uvArray[faceIdx * 8 + 4] = normalizeU(box.uvEast[0]);
+			uvArray[faceIdx * 8 + 5] = normalizeV(box.uvEast[1]);
+			uvArray[faceIdx * 8 + 6] = normalizeU(box.uvEast[2]);
+			uvArray[faceIdx * 8 + 7] = normalizeV(box.uvEast[1]);
+		}
+
+		// West face (-X) - face index 1
+		if (box.uvWest) {
+			const faceIdx = 1;
+			uvArray[faceIdx * 8 + 0] = normalizeU(box.uvWest[0]);
+			uvArray[faceIdx * 8 + 1] = normalizeV(box.uvWest[3]);
+			uvArray[faceIdx * 8 + 2] = normalizeU(box.uvWest[2]);
+			uvArray[faceIdx * 8 + 3] = normalizeV(box.uvWest[3]);
+			uvArray[faceIdx * 8 + 4] = normalizeU(box.uvWest[0]);
+			uvArray[faceIdx * 8 + 5] = normalizeV(box.uvWest[1]);
+			uvArray[faceIdx * 8 + 6] = normalizeU(box.uvWest[2]);
+			uvArray[faceIdx * 8 + 7] = normalizeV(box.uvWest[1]);
+		}
+
+		// Up face (+Y) - face index 2
+		if (box.uvUp) {
+			const faceIdx = 2;
+			uvArray[faceIdx * 8 + 0] = normalizeU(box.uvUp[0]);
+			uvArray[faceIdx * 8 + 1] = normalizeV(box.uvUp[1]);
+			uvArray[faceIdx * 8 + 2] = normalizeU(box.uvUp[2]);
+			uvArray[faceIdx * 8 + 3] = normalizeV(box.uvUp[1]);
+			uvArray[faceIdx * 8 + 4] = normalizeU(box.uvUp[0]);
+			uvArray[faceIdx * 8 + 5] = normalizeV(box.uvUp[3]);
+			uvArray[faceIdx * 8 + 6] = normalizeU(box.uvUp[2]);
+			uvArray[faceIdx * 8 + 7] = normalizeV(box.uvUp[3]);
+		}
+
+		// Down face (-Y) - face index 3
+		if (box.uvDown) {
+			const faceIdx = 3;
+			uvArray[faceIdx * 8 + 0] = normalizeU(box.uvDown[0]);
+			uvArray[faceIdx * 8 + 1] = normalizeV(box.uvDown[1]);
+			uvArray[faceIdx * 8 + 2] = normalizeU(box.uvDown[2]);
+			uvArray[faceIdx * 8 + 3] = normalizeV(box.uvDown[1]);
+			uvArray[faceIdx * 8 + 4] = normalizeU(box.uvDown[0]);
+			uvArray[faceIdx * 8 + 5] = normalizeV(box.uvDown[3]);
+			uvArray[faceIdx * 8 + 6] = normalizeU(box.uvDown[2]);
+			uvArray[faceIdx * 8 + 7] = normalizeV(box.uvDown[3]);
+		}
+
+		// South face (+Z) - face index 4
+		if (box.uvSouth) {
+			const faceIdx = 4;
+			uvArray[faceIdx * 8 + 0] = normalizeU(box.uvSouth[0]);
+			uvArray[faceIdx * 8 + 1] = normalizeV(box.uvSouth[3]);
+			uvArray[faceIdx * 8 + 2] = normalizeU(box.uvSouth[2]);
+			uvArray[faceIdx * 8 + 3] = normalizeV(box.uvSouth[3]);
+			uvArray[faceIdx * 8 + 4] = normalizeU(box.uvSouth[0]);
+			uvArray[faceIdx * 8 + 5] = normalizeV(box.uvSouth[1]);
+			uvArray[faceIdx * 8 + 6] = normalizeU(box.uvSouth[2]);
+			uvArray[faceIdx * 8 + 7] = normalizeV(box.uvSouth[1]);
+		}
+
+		// North face (-Z) - face index 5
+		if (box.uvNorth) {
+			const faceIdx = 5;
+			uvArray[faceIdx * 8 + 0] = normalizeU(box.uvNorth[0]);
+			uvArray[faceIdx * 8 + 1] = normalizeV(box.uvNorth[3]);
+			uvArray[faceIdx * 8 + 2] = normalizeU(box.uvNorth[2]);
+			uvArray[faceIdx * 8 + 3] = normalizeV(box.uvNorth[3]);
+			uvArray[faceIdx * 8 + 4] = normalizeU(box.uvNorth[0]);
+			uvArray[faceIdx * 8 + 5] = normalizeV(box.uvNorth[1]);
+			uvArray[faceIdx * 8 + 6] = normalizeU(box.uvNorth[2]);
+			uvArray[faceIdx * 8 + 7] = normalizeV(box.uvNorth[1]);
+		}
+
+		// Update the geometry's UV attribute
+		geometry.setAttribute("uv", new THREE.BufferAttribute(uvArray, 2));
 	}
 }

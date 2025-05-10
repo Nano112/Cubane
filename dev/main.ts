@@ -163,7 +163,7 @@ function animate() {
 animate();
 
 //default to minecraft:chest as a first block
-const defaultBlock = "minecraft:chest";
+const defaultBlock = "minecraft:bell";
 currentMesh = await getBlockMesh(defaultBlock);
 scene.add(currentMesh);
 camera.lookAt(currentMesh.position);
