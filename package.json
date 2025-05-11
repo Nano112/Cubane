@@ -1,20 +1,58 @@
 {
-	"name": "Cubane",
-	"private": true,
-	"version": "0.0.0",
+	"name": "cubane",
+	"version": "1.0.0",
+	"description": "A Three.js-based Minecraft block and entity renderer with resource pack support",
 	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"files": [
+		"dist",
+		"LICENSE",
+		"README.md"
+	],
 	"scripts": {
 		"dev": "vite",
-		"build": "tsc && vite build",
+		"build": "tsc --project tsconfig.build.json && vite build",
+		"build:types": "tsc --project tsconfig.build.json --emitDeclarationOnly",
+		"prepare": "npm run build",
+		"prepublishOnly": "npm run build",
 		"preview": "vite preview"
+	},
+	"keywords": [
+		"minecraft",
+		"three.js",
+		"renderer",
+		"blocks",
+		"voxel",
+		"resource-pack"
+	],
+	"author": "Nano112",
+	"license": "AGPL-3.0-or-later",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Nano112/cubane.git"
+	},
+	"homepage": "https://github.com/Nano112/cubane",
+	"bugs": {
+		"url": "https://github.com/Nano112/cubane/issues"
 	},
 	"devDependencies": {
 		"typescript": "~5.7.2",
 		"vite": "^6.3.1"
 	},
 	"dependencies": {
-		"@types/three": "^0.176.0",
-		"jszip": "^3.10.1",
+		"jszip": "^3.10.1"
+	},
+	"peerDependencies": {
 		"three": "^0.176.0"
+	},
+	"devDependencies": {
+		"@types/three": "0.176.0",
+		"typescript": "~5.7.2",
+		"vite": "^6.3.1",
+		"three": "^0.176.0"
+	},
+	"engines": {
+		"node": ">=14.0.0"
 	}
 }

@@ -65,13 +65,13 @@ export class Cubane {
 				reject(new Error("Failed to open IndexedDB"));
 			};
 
-			request.onsuccess = (event) => {
+			request.onsuccess = () => {
 				this.db = request.result;
 				console.log("Cubane: IndexedDB opened successfully");
 
 				// Test if database is accessible
 				try {
-					const testTransaction = this.db.transaction(
+					this.db.transaction(
 						["resourcePacks"],
 						"readonly"
 					);
@@ -83,7 +83,7 @@ export class Cubane {
 				resolve(this.db);
 			};
 
-			request.onupgradeneeded = (event) => {
+			request.onupgradeneeded = () => {
 				const db = request.result;
 				console.log("Cubane: Upgrading database schema");
 
@@ -107,7 +107,7 @@ export class Cubane {
 		try {
 			const db = await this.initDatabase();
 
-			return new Promise((resolve, reject) => {
+			return new Promise((resolve) => {
 				const transaction = db.transaction(["resourcePacks"], "readwrite");
 				const store = transaction.objectStore("resourcePacks");
 
@@ -120,8 +120,10 @@ export class Cubane {
 				const request = store.put(item);
 
 				request.onsuccess = () => resolve();
-				request.onerror = () =>
-					reject(new Error("Failed to store resource pack"));
+				request.onerror = () => {
+					console.error("Failed to store resource pack:", request.error);
+					resolve(); // Resolve anyway to continue execution
+				};
 			});
 		} catch (error) {
 			console.error("Error storing resource pack:", error);
@@ -140,7 +142,7 @@ export class Cubane {
 		try {
 			const db = await this.initDatabase();
 
-			return new Promise((resolve, reject) => {
+			return new Promise((resolve) => {
 				const transaction = db.transaction(["resourcePacks"], "readonly");
 				const store = transaction.objectStore("resourcePacks");
 
@@ -195,7 +197,7 @@ export class Cubane {
 
 			const request = index.openCursor(IDBKeyRange.upperBound(cutoffTime));
 
-			request.onsuccess = (event) => {
+			request.onsuccess = () => {
 				const cursor = request.result;
 				if (cursor) {
 					store.delete(cursor.primaryKey);
@@ -350,7 +352,7 @@ export class Cubane {
 					timestamp: number;
 				}> = [];
 
-				request.onsuccess = (event) => {
+				request.onsuccess = () => {
 					const cursor = request.result;
 					if (cursor) {
 						// Extract basic info without the actual blob to save memory
@@ -588,6 +590,12 @@ export class Cubane {
 
 			// Get entity mesh
 			const mesh = await this.entityRenderer.createEntityMesh(entityType);
+			
+			// Check if mesh is null or undefined
+			if (!mesh) {
+				console.warn(`No mesh created for entity: ${entityType}`);
+				return this.createFallbackMesh();
+			}
 
 			if (position) {
 				mesh.position.copy(position);

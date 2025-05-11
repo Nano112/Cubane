@@ -264,7 +264,7 @@ export class AssetLoader {
 					// Merge textures, keeping our specific ones if not overridden
 					if (originalModel.textures) {
 						console.log(`Merging original model textures with enhanced model`);
-						Object.assign(liquidModel.textures, originalModel.textures);
+						Object.assign(liquidModel.textures || {}, originalModel.textures);
 					}
 
 					// If original model has elements but we're dealing with a level-specific variant,
@@ -352,7 +352,7 @@ export class AssetLoader {
 				};
 
 				// Get next parent or end the loop
-				parentPath = parentModel.parent;
+				parentPath = parentModel.parent || '';
 				depth++;
 			} catch (error) {
 				console.error(`Error parsing parent model ${parentPath}:`, error);

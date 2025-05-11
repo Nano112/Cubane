@@ -78,7 +78,7 @@ export class TintManager {
 
 	private getFoliageTint(
 		blockId: string,
-		position?: THREE.Vector3
+		_position?: THREE.Vector3
 	): THREE.Color {
 		// In a real implementation, this would use biome data
 		// For now, use a default grass/leaves color
@@ -88,7 +88,7 @@ export class TintManager {
 		return new THREE.Color(0.4, 0.7, 0.2); // Default foliage green
 	}
 
-	private getWaterTint(position?: THREE.Vector3): THREE.Color {
+	private getWaterTint(_position?: THREE.Vector3): THREE.Color {
 		// In a real implementation, this would use biome data
 		// Default water color (slightly blue)
 		return new THREE.Color(0.2, 0.3, 0.9);

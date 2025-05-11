@@ -1,4 +1,4 @@
-export * from "./Cubane";
-export * from "./AssetLoader";
-export * from "./BlockMeshBuilder";
-export * from "./types";
+export { Cubane } from "./Cubane";
+
+export type { ResourcePackLoadOptions } from "./types";
+export type { ResourcePackLoader } from "./types";

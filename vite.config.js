@@ -1,26 +1,25 @@
 import { defineConfig } from 'vite';
-import path from 'path';
+import { resolve } from 'path';
 
 export default defineConfig({
-    root: './dev',
     build: {
-        outDir: '../dist',
+        outDir: 'dist',
         lib: {
-            entry: path.resolve(__dirname, 'src/index.ts'),
+            entry: resolve('./src/index.ts'),
             name: 'Cubane',
             fileName: (format) => `cubane.${format}.js`,
-            formats: ['umd', 'es'],
+            formats: ['es', 'umd']
         },
         sourcemap: true,
         rollupOptions: {
-            external: ['three'],
+            external: ['three', 'jszip'],
             output: {
                 globals: {
                     three: 'THREE',
-                },
-            },
-        },
-
+                    jszip: 'JSZip'
+                }
+            }
+        }
     },
     define: {
         'process.env': {},

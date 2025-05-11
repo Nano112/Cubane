@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { AssetLoader, BlockModel, BlockModelElement } from "./AssetLoader";
-import { Block } from "./types";
+import { AssetLoader } from "./AssetLoader";
+import { Block, BlockModel, BlockModelElement } from "./types";
 
 const FACING_UV_ROT: Record<string, 0 | 90 | 180 | 270> = {
 	south: 180,
@@ -116,7 +116,7 @@ export class BlockMeshBuilder {
 		element: BlockModelElement,
 		model: BlockModel,
 		block?: Block, // Add block parameter
-		biome: string = "plains" // Add biome parameter with default
+		_biome: string = "plains" // Add biome parameter with default
 	): Promise<THREE.Object3D> {
 		// Extract element properties
 		const from = element.from || [0, 0, 0];

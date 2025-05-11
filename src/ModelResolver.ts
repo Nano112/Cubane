@@ -1,5 +1,6 @@
 import { AssetLoader } from "./AssetLoader";
-import { ModelData, Block } from "./types";
+import { ModelData, Block, BlockStateDefinitionVariant } from "./types";
+
 export class ModelResolver {
 	private assetLoader: AssetLoader;
 
@@ -183,8 +184,8 @@ export class ModelResolver {
 					if ("OR" in part.when) {
 						// OR condition - any of the conditions can match
 						applies = false;
-						for (const condition of part.when.OR) {
-							if (this.matchesCondition(block, condition)) {
+						for (const condition of part.when.OR as BlockStateDefinitionVariant<string>[]) {
+							if (this.matchesCondition(block, condition as Record<string, string>)) {
 								applies = true;
 								break;
 							}
@@ -218,7 +219,7 @@ export class ModelResolver {
 		const level = levelStr ? parseInt(levelStr, 10) : 0;
 
 		// Calculate level information
-		const isFullBlock = level === 0;
+		// const _isFullBlock = level === 0; // Not used currently
 
 		// Create a model path that encodes the level information
 		const modelPath = isWater
