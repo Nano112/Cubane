@@ -11,7 +11,18 @@ export class ModelResolver {
 	 * Resolve a block to its models
 	 */
 	public async resolveBlockModel(block: Block): Promise<ModelData[]> {
-		// Get block state definition
+		// Special handling for liquids - use the minimal model files that exist
+		if (
+			block.name === "water" ||
+			block.name === "flowing_water" ||
+			block.name === "lava" ||
+			block.name === "flowing_lava"
+		) {
+			console.log(`Handling special liquid block: ${block.name}`);
+			return this.createLiquidModelData(block);
+		}
+
+		// Regular block state handling
 		const blockName = block.name.replace("minecraft:", "");
 		const blockStateDefinition = await this.assetLoader.getBlockState(
 			blockName
@@ -197,6 +208,37 @@ export class ModelResolver {
 		}
 
 		return models;
+	}
+
+	private createLiquidModelData(block: Block): ModelData[] {
+		const isWater = block.name.includes("water");
+
+		// Get level property - defaults to 0 (full block) if not specified
+		const levelStr = block.properties?.level;
+		const level = levelStr ? parseInt(levelStr, 10) : 0;
+
+		// Calculate level information
+		const isFullBlock = level === 0;
+
+		// Create a model path that encodes the level information
+		const modelPath = isWater
+			? level === 0
+				? "block/water"
+				: `block/water_level_${level}`
+			: level === 0
+			? "block/lava"
+			: `block/lava_level_${level}`;
+
+		console.log(`Creating liquid model: ${modelPath} with level ${level}`);
+
+		return [
+			{
+				model: modelPath,
+				x: 0,
+				y: 0,
+				uvlock: false,
+			},
+		];
 	}
 
 	private createModelData(modelHolder: any): ModelData {

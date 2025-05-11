@@ -2,55 +2,7 @@ import * as THREE from "three";
 import JSZip from "jszip";
 import { AnimatedTextureManager } from "./AnimatedTextureManager";
 import { TintManager } from "./TintManager";
-export interface BlockStateDefinition {
-	variants?: Record<string, BlockStateModelHolder | BlockStateModelHolder[]>;
-	multipart?: BlockStateMultipart[];
-}
-
-export interface BlockStateModelHolder {
-	model: string;
-	x?: number;
-	y?: number;
-	uvlock?: boolean;
-	weight?: number;
-}
-
-export interface BlockStateMultipart {
-	when?:
-		| BlockStateDefinitionVariant<string>
-		| { OR: BlockStateDefinitionVariant<string>[] };
-	apply: BlockStateModelHolder | BlockStateModelHolder[];
-}
-
-export interface BlockStateDefinitionVariant<T> {
-	[property: string]: T;
-}
-
-export interface BlockModel {
-	parent?: string;
-	textures?: Record<string, string>;
-	elements?: BlockModelElement[];
-	display?: Record<string, any>;
-}
-
-export interface BlockModelElement {
-	from: [number, number, number];
-	to: [number, number, number];
-	rotation?: {
-		origin: [number, number, number];
-		axis: "x" | "y" | "z";
-		angle: number;
-	};
-	faces?: {
-		[face in "down" | "up" | "north" | "south" | "west" | "east"]?: {
-			texture: string;
-			cullface?: string;
-			rotation?: number;
-			tintindex?: number;
-			uv?: [number, number, number, number];
-		};
-	};
-}
+import { BlockModel, BlockStateDefinition } from "./types";
 
 export class AssetLoader {
 	private resourcePacks: Map<string, JSZip> = new Map();
@@ -224,7 +176,118 @@ export class AssetLoader {
 
 		console.log(`Loading model: ${modelPath}`);
 
-		// Load from resource pack
+		// Special handling for liquid models with level information
+		if (
+			modelPath.startsWith("block/water") ||
+			modelPath.startsWith("block/lava")
+		) {
+			const isWater = modelPath.startsWith("block/water");
+
+			// Extract level from model path if present
+			let level = 0;
+			const levelMatch = modelPath.match(/_level_(\d+)/);
+			if (levelMatch) {
+				level = parseInt(levelMatch[1], 10);
+				console.log(
+					`Detected liquid level ${level} from model path: ${modelPath}`
+				);
+			}
+
+			// Calculate liquid height based on level
+			// In Minecraft:
+			// Level 0 = full/source block
+			// Level 1-7 = progressively lower flowing blocks
+			const liquidHeight = level === 0 ? 16 : 16 - level * 2;
+
+			// Special case: water source blocks are 14px high, not 16px
+			const actualHeight = isWater && level === 0 ? 14 : liquidHeight;
+
+			console.log(
+				`Creating ${
+					isWater ? "water" : "lava"
+				} model with height: ${actualHeight}/16 for level ${level}`
+			);
+
+			// Create an enhanced liquid model
+			const liquidModel: BlockModel = {
+				textures: {
+					particle: isWater ? "block/water_still" : "block/lava_still",
+					all: isWater ? "block/water_still" : "block/lava_still",
+					top: isWater ? "block/water_still" : "block/lava_still",
+					bottom: isWater ? "block/water_still" : "block/lava_still",
+					north: isWater ? "block/water_flow" : "block/lava_flow",
+					south: isWater ? "block/water_flow" : "block/lava_flow",
+					east: isWater ? "block/water_flow" : "block/lava_flow",
+					west: isWater ? "block/water_flow" : "block/lava_flow",
+				},
+				elements: [
+					{
+						from: [0, 0, 0],
+						to: [16, actualHeight, 16], // Dynamic height based on level
+						faces: {
+							down: { texture: "#bottom", cullface: "down" },
+							up: { texture: "#top", cullface: "up" },
+							north: { texture: "#north", cullface: "north" },
+							south: { texture: "#south", cullface: "south" },
+							west: { texture: "#west", cullface: "west" },
+							east: { texture: "#east", cullface: "east" },
+						},
+					},
+				],
+			};
+
+			// Try to load the original model file if it exists and merge with our enhanced one
+			let originalModelFound = false;
+			try {
+				// First try the exact path
+				let jsonString = await this.getResourceString(
+					`models/${modelPath}.json`
+				);
+
+				// If not found and this is a level-specific model, try the base model
+				if (!jsonString && levelMatch) {
+					const baseModelPath = isWater ? "block/water" : "block/lava";
+					jsonString = await this.getResourceString(
+						`models/${baseModelPath}.json`
+					);
+					if (jsonString) {
+						console.log(
+							`Using base liquid model for level variant: ${baseModelPath}`
+						);
+					}
+				}
+
+				if (jsonString) {
+					originalModelFound = true;
+					const originalModel = JSON.parse(jsonString) as BlockModel;
+
+					// Merge textures, keeping our specific ones if not overridden
+					if (originalModel.textures) {
+						console.log(`Merging original model textures with enhanced model`);
+						Object.assign(liquidModel.textures, originalModel.textures);
+					}
+
+					// If original model has elements but we're dealing with a level-specific variant,
+					// don't use them since we need our custom height
+					if (originalModel.elements && !levelMatch) {
+						console.log(`Using original model elements from ${modelPath}`);
+						liquidModel.elements = originalModel.elements;
+					}
+				}
+			} catch (error) {
+				console.warn(`Error loading original liquid model: ${error}`);
+			}
+
+			if (!originalModelFound) {
+				console.log(`No original model found, using enhanced liquid model`);
+			}
+
+			// Cache and return the enhanced model
+			this.modelCache.set(cacheKey, liquidModel);
+			return liquidModel;
+		}
+
+		// For non-liquid models, load from resource pack
 		const jsonString = await this.getResourceString(`models/${modelPath}.json`);
 		if (!jsonString) {
 			console.warn(`Model definition for ${modelPath} not found.`);
@@ -346,9 +409,6 @@ export class AssetLoader {
 		this.animatedTextureManager.update();
 	}
 
-	/**
-	 * Get a texture for a given path
-	 */
 	public async getTexture(texturePath: string): Promise<THREE.Texture> {
 		// Handle missing texture path
 		if (
@@ -356,28 +416,45 @@ export class AssetLoader {
 			texturePath === "missing_texture" ||
 			texturePath === "block/missing_texture"
 		) {
+			console.warn("Missing texture path requested");
 			return this.createMissingTexture();
 		}
 
 		// Check cache first
 		const cacheKey = `texture:${texturePath}`;
 		if (this.textureCache.has(cacheKey)) {
+			console.log(`Using cached texture: ${texturePath}`);
 			return this.textureCache.get(cacheKey)!;
 		}
 
-		console.log(`Loading texture: ${texturePath}`);
+		console.log(`Attempting to load texture: ${texturePath}`);
 
+		// Special handling for liquid textures
+		if (
+			texturePath === "block/water_still" ||
+			texturePath === "block/water_flow" ||
+			texturePath === "block/lava_still" ||
+			texturePath === "block/lava_flow"
+		) {
+			console.log(`Loading special liquid texture: ${texturePath}`);
+		}
+
+		// Check for animation
 		const isAnimated = await this.animatedTextureManager.isAnimated(
 			`textures/${texturePath}`
 		);
 
 		if (isAnimated) {
-			// Handle animated texture
 			const animatedTexture =
 				await this.animatedTextureManager.createAnimatedTexture(texturePath);
 			if (animatedTexture) {
+				console.log(`Successfully created animated texture for ${texturePath}`);
 				this.textureCache.set(cacheKey, animatedTexture);
 				return animatedTexture;
+			} else {
+				console.warn(
+					`Failed to create animated texture for ${texturePath}, falling back to static`
+				);
 			}
 		}
 
@@ -385,14 +462,41 @@ export class AssetLoader {
 		const fullPath = texturePath.endsWith(".png")
 			? texturePath
 			: `${texturePath}.png`;
+		console.log(`Looking for texture at: textures/${fullPath}`);
 
 		// Load texture blob from resource pack
 		const blob = await this.getResourceBlob(`textures/${fullPath}`);
 		if (!blob) {
-			console.warn(`Texture ${texturePath} not found`);
+			console.warn(`Texture blob not found for ${texturePath}`);
+
+			// Special fallback for minecraft textures that might have different locations
+			if (texturePath.startsWith("block/")) {
+				// Try without the "block/" prefix
+				const altPath = texturePath.replace("block/", "");
+				console.log(`Trying alternate path: textures/${altPath}.png`);
+				const altBlob = await this.getResourceBlob(`textures/${altPath}.png`);
+				if (altBlob) {
+					console.log(
+						`Found texture at alternate path: textures/${altPath}.png`
+					);
+					// Continue with this blob
+					return this.createTextureFromBlob(altBlob, cacheKey);
+				}
+			}
+
+			console.error(`Texture ${texturePath} not found, using missing texture`);
 			return this.createMissingTexture();
 		}
 
+		return this.createTextureFromBlob(blob, cacheKey, texturePath);
+	}
+
+	// Helper for creating a texture from a blob
+	private async createTextureFromBlob(
+		blob: Blob,
+		cacheKey: string,
+		texturePath: string = ""
+	): Promise<THREE.Texture> {
 		// Convert blob to data URL
 		const url = URL.createObjectURL(blob);
 
@@ -420,6 +524,7 @@ export class AssetLoader {
 				);
 			});
 
+			console.log(`Successfully loaded texture: ${texturePath}`);
 			// Cache the texture
 			this.textureCache.set(cacheKey, texture);
 
@@ -439,66 +544,154 @@ export class AssetLoader {
 	}
 
 	/**
-	 * Create a material for a texture with optional tinting
+	 * Create a material for a texture with optional tinting and liquid properties
 	 */
 	public async getMaterial(
 		texturePath: string,
 		options: {
 			transparent?: boolean;
 			tint?: THREE.Color;
+			isLiquid?: boolean;
+			isWater?: boolean;
+			isLava?: boolean;
+			faceDirection?: string;
+			forceAnimation?: boolean;
 		} = {}
 	): Promise<THREE.Material> {
-		// Create cache key including tint information
+		// Create cache key including all options
 		const tintKey = options.tint
 			? `:tint:${options.tint.r.toFixed(3)},${options.tint.g.toFixed(
 					3
 			  )},${options.tint.b.toFixed(3)}`
 			: "";
 
+		const liquidKey = options.isLiquid
+			? `:liquid:${options.isWater ? "water" : "lava"}:${
+					options.faceDirection || ""
+			  }`
+			: "";
+
 		const cacheKey = `material:${texturePath}:${
 			options.transparent ? "transparent" : "opaque"
-		}${tintKey}`;
+		}${tintKey}${liquidKey}`;
 
 		// Check cache first
 		if (this.materialCache.has(cacheKey)) {
 			return this.materialCache.get(cacheKey)!;
 		}
 
-		// Create the material
-		try {
-			const texture = await this.getTexture(texturePath);
-
-			const material = new THREE.MeshStandardMaterial({
-				map: texture,
-				transparent: options.transparent || false,
-				alphaTest: 0.5,
-				roughness: 0.8,
-				metalness: 0.1,
-				side: options.transparent ? THREE.DoubleSide : THREE.FrontSide,
-			});
-
-			// Apply tint if provided
-			if (options.tint) {
-				material.color = options.tint;
-				// Enable color multiplication with texture
-				material.defines = material.defines || {};
-				material.defines.USE_COLOR = "";
+		// Handle special paths for liquids
+		let finalTexturePath = texturePath;
+		if (options.isWater) {
+			// Make sure we're using the correct water texture based on face direction
+			if (options.faceDirection === "up" || options.faceDirection === "down") {
+				// For top/bottom faces, use still water
+				finalTexturePath = "block/water_still";
+			} else {
+				// For side faces, use flowing water
+				finalTexturePath = "block/water_flow";
 			}
-
-			// Cache and return
-			this.materialCache.set(cacheKey, material);
-			return material;
-		} catch (error) {
-			console.error(`Error creating material for ${texturePath}:`, error);
-
-			// Create a fallback material with tint if provided
-			const material = new THREE.MeshStandardMaterial({
-				color: options.tint || new THREE.Color(0xff00ff), // Use tint or magenta for missing textures
-				wireframe: true,
-			});
-
-			return material;
+		} else if (options.isLava) {
+			// Make sure we're using the correct lava texture based on face direction
+			if (options.faceDirection === "up" || options.faceDirection === "down") {
+				// For top/bottom faces, use still lava
+				finalTexturePath = "block/lava_still";
+			} else {
+				// For side faces, use flowing lava
+				finalTexturePath = "block/lava_flow";
+			}
 		}
+
+		// Try to load as animated texture for liquids or if animation is forced
+		let texture: THREE.Texture;
+
+		// Check if this path should be animated
+		const shouldCheckAnimation =
+			options.isLiquid ||
+			options.forceAnimation ||
+			finalTexturePath.includes("water") ||
+			finalTexturePath.includes("lava");
+
+		if (shouldCheckAnimation) {
+			const isAnimated = await this.animatedTextureManager.isAnimated(
+				`textures/${finalTexturePath}`
+			);
+
+			if (isAnimated) {
+				const animatedTexture =
+					await this.animatedTextureManager.createAnimatedTexture(
+						finalTexturePath
+					);
+
+				if (animatedTexture) {
+					texture = animatedTexture;
+				} else {
+					// Fallback to regular texture
+					texture = await this.getTexture(finalTexturePath);
+				}
+			} else {
+				// Not animated
+				texture = await this.getTexture(finalTexturePath);
+			}
+		} else {
+			// Regular texture
+			texture = await this.getTexture(finalTexturePath);
+		}
+
+		// Create the material with appropriate settings
+		const material = new THREE.MeshStandardMaterial({
+			map: texture,
+			transparent: options.transparent || options.isWater || false,
+			opacity: options.isWater ? 0.8 : 1.0,
+			alphaTest: options.transparent && !options.isWater ? 0.5 : 0,
+			roughness: options.isWater && options.faceDirection === "up" ? 0.1 : 0.8,
+			metalness: options.isWater && options.faceDirection === "up" ? 0.3 : 0.1,
+			side: THREE.DoubleSide, // Use double-sided for liquids and transparent materials
+		});
+
+		// Apply tint if provided
+		if (options.tint) {
+			material.color = options.tint;
+			// Enable color multiplication with texture
+			material.defines = material.defines || {};
+			material.defines.USE_COLOR = "";
+		}
+
+		// Apply special properties for water
+		if (options.isWater) {
+			// Store water data for special rendering
+			material.userData.isWater = true;
+			material.userData.faceDirection = options.faceDirection;
+			material.userData.renderToWaterPass = true;
+		}
+
+		// Apply special properties for lava
+		if (options.isLava) {
+			material.emissive = new THREE.Color(0xff2200);
+			material.emissiveIntensity = 0.5;
+			material.roughness = 0.7;
+
+			// Store lava data for special rendering
+			material.userData.isLava = true;
+			material.userData.faceDirection = options.faceDirection;
+			material.userData.renderToLavaPass = true;
+
+			// Add pulsing effect parameters
+			material.userData.lavaAnimationParams = {
+				pulseSpeed: 0.4,
+				pulseMin: 0.4,
+				pulseMax: 0.6,
+			};
+		}
+
+		// Store liquidness in userData for potential rendering optimizations
+		if (options.isLiquid) {
+			material.userData.isLiquid = true;
+		}
+
+		// Cache and return the material
+		this.materialCache.set(cacheKey, material);
+		return material;
 	}
 
 	// Add to your AssetLoader class

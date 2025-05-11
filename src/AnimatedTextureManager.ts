@@ -1,18 +1,9 @@
 import * as THREE from "three";
 import { AssetLoader } from "./AssetLoader";
-
+import { TextureAnimationMetadata } from "./types";
 /**
  * Animation metadata structure that matches Minecraft's mcmeta format
  */
-interface TextureAnimationMetadata {
-	animation: {
-		frametime?: number; // How long each frame lasts (in ticks, default: 1)
-		frames?: number[]; // Optional custom frame order
-		interpolate?: boolean; // Whether to interpolate between frames
-		width?: number; // Optional frame width
-		height?: number; // Optional frame height
-	};
-}
 
 /**
  * Extended class to handle animated textures

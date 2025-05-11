@@ -45,6 +45,8 @@ export class BlockMeshBuilder {
 
 		// Get the block from either parameter or transform object for backward compatibility
 		const blockData = block || transform.block;
+		const isLiquid = blockData && this.isLiquidBlock(blockData);
+		const isWater = blockData && this.isWaterBlock(blockData);
 
 		// Create a group to hold all elements
 		const group = new THREE.Group();
@@ -83,14 +85,33 @@ export class BlockMeshBuilder {
 			(group as any).blockData = blockData;
 		}
 		(group as any).biome = biome;
+		if (isLiquid) {
+			(group as any).isLiquid = true;
+			(group as any).isWater = isWater;
+			(group as any).isLava = isLiquid && !isWater;
+		}
 
-		// Return the group directly - don't try to combine into a single mesh
 		return group;
 	}
 
-	/**
-	 * Create a mesh for a single element
-	 */
+	private isLiquidBlock(block: Block): boolean {
+		if (!block) return false;
+		const blockId = `${block.namespace}:${block.name}`;
+		return blockId.includes("water") || blockId.includes("lava");
+	}
+
+	private isWaterBlock(block?: Block): boolean {
+		if (!block) return false;
+		const blockId = `${block.namespace}:${block.name}`;
+		return blockId.includes("water") && !blockId.includes("waterlogged");
+	}
+
+	private isLavaBlock(block?: Block): boolean {
+		if (!block) return false;
+		const blockId = `${block.namespace}:${block.name}`;
+		return blockId.includes("lava");
+	}
+
 	private async createElementMesh(
 		element: BlockModelElement,
 		model: BlockModel,
@@ -114,6 +135,13 @@ export class BlockMeshBuilder {
 			(from[1] + to[1]) / 32 - 0.5,
 			(from[2] + to[2]) / 32 - 0.5,
 		];
+
+		if (block && this.isWaterBlock(block) && to[1] === 16) {
+			// Water is typically 14/16 blocks high in Minecraft
+			to[1] = 14;
+			size[1] = (to[1] - from[1]) / 16;
+			center[1] = (from[1] + to[1]) / 32 - 0.5;
+		}
 
 		// Create group for this element
 		const elementGroup = new THREE.Group();
@@ -230,17 +258,38 @@ export class BlockMeshBuilder {
 
 		this.mapUVCoordinates(geometry, direction, faceData);
 
-		const texturePath = this.assetLoader.resolveTexture(
-			faceData.texture,
-			model
-		);
+		// Get the base texture path from the model
+		let texturePath = this.assetLoader.resolveTexture(faceData.texture, model);
+
+		// Identify if this is a liquid block
+		const isWater = this.isWaterBlock(block);
+		const isLava = this.isLavaBlock(block);
+		const isLiquid = isWater || isLava;
+
+		// Special handling for liquids - override texture paths for different faces
+		if (isWater) {
+			// For water, use still texture on top/bottom, flow texture on sides
+			if (direction === "up" || direction === "down") {
+				texturePath = "block/water_still";
+			} else {
+				texturePath = "block/water_flow";
+			}
+		} else if (isLava) {
+			// For lava, use still texture on top/bottom, flow texture on sides
+			if (direction === "up" || direction === "down") {
+				texturePath = "block/lava_still";
+			} else {
+				texturePath = "block/lava_flow";
+			}
+		}
 
 		let material: THREE.Material;
 		try {
+			// Set transparency based on block type
 			const isTransparent =
 				texturePath.includes("glass") ||
 				texturePath.includes("leaves") ||
-				texturePath.includes("water");
+				isWater;
 
 			let tint: THREE.Color | undefined = undefined;
 			if (block && faceData.tintindex !== undefined) {
@@ -248,14 +297,61 @@ export class BlockMeshBuilder {
 				tint = this.assetLoader.getTint(blockId, block.properties);
 			}
 
-			material = await this.assetLoader.getMaterial(texturePath, {
+			// If water but no tint defined, add default blue tint
+			if (isWater && !tint) {
+				tint = new THREE.Color(0x3f76e4); // Default Minecraft water color
+			}
+
+			// Get material with specialized options for liquids
+			const materialOptions: any = {
 				transparent: isTransparent,
 				tint: tint,
-			});
+				isLiquid: isLiquid,
+				isWater: isWater,
+				isLava: isLava,
+				faceDirection: direction,
+				forceAnimation: isLiquid, // Always force animation check for liquids
+			};
+
+			material = await this.assetLoader.getMaterial(
+				texturePath,
+				materialOptions
+			);
 
 			if (material instanceof THREE.Material) {
 				material = material.clone();
 				material.side = THREE.DoubleSide;
+
+				// Special properties for water
+				if (isWater) {
+					material.transparent = true;
+					material.opacity = 0.8;
+
+					// Store metadata for special rendering
+					material.userData.isWater = true;
+					material.userData.faceDirection = direction;
+
+					// Special properties for water top face
+					if (direction === "up") {
+						if (material instanceof THREE.MeshStandardMaterial) {
+							material.roughness = 0.1;
+							material.metalness = 0.3;
+						}
+					}
+				}
+
+				// Special properties for lava
+				if (isLava) {
+					if (material instanceof THREE.MeshStandardMaterial) {
+						material.emissive = new THREE.Color(0xff2200);
+						material.emissiveIntensity = 0.5;
+						material.roughness = 0.7;
+					}
+
+					// Store metadata for special rendering
+					material.userData.isLava = true;
+					material.userData.faceDirection = direction;
+				}
 			}
 		} catch (error) {
 			console.warn(`Failed to create material for ${texturePath}:`, error);
@@ -268,6 +364,18 @@ export class BlockMeshBuilder {
 
 		const mesh = new THREE.Mesh(geometry, material);
 		mesh.position.set(...position);
+
+		// Tag the mesh with metadata for rendering system
+		if (isLiquid) {
+			mesh.userData.isLiquid = true;
+			mesh.userData.isWater = isWater;
+			mesh.userData.isLava = isLava;
+			mesh.userData.faceDirection = direction;
+
+			// Set render order for proper transparency sorting
+			// Higher renderOrder means drawn later (on top)
+			mesh.renderOrder = isWater ? 1000 : 950;
+		}
 
 		return mesh;
 	}
