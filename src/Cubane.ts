@@ -46,7 +46,14 @@ export class Cubane {
 	 * Initialize the IndexedDB database
 	 * @private
 	 */
-	private async initDatabase(): Promise<IDBDatabase> {
+	private async initDatabase(): Promise<IDBDatabase | null> {
+		// Check if running in a browser environment
+		const isBrowser = typeof window !== "undefined";
+
+		if (!isBrowser) {
+			console.log("Cubane: Running in Node.js - caching disabled");
+			return Promise.resolve(null);
+		}
 		if (this.db) return this.db;
 
 		// Check if IndexedDB is supported
@@ -71,10 +78,7 @@ export class Cubane {
 
 				// Test if database is accessible
 				try {
-					this.db.transaction(
-						["resourcePacks"],
-						"readonly"
-					);
+					this.db.transaction(["resourcePacks"], "readonly");
 					console.log("Cubane: IndexedDB test transaction successful");
 				} catch (err) {
 					console.warn("Cubane: IndexedDB test transaction failed:", err);
@@ -106,6 +110,10 @@ export class Cubane {
 	private async storeResourcePack(packId: string, blob: Blob): Promise<void> {
 		try {
 			const db = await this.initDatabase();
+			if (!db) {
+				console.warn("Cubane: No IndexedDB available, skipping storage");
+				return;
+			}
 
 			return new Promise((resolve) => {
 				const transaction = db.transaction(["resourcePacks"], "readwrite");
@@ -141,7 +149,10 @@ export class Cubane {
 	): Promise<Blob | null> {
 		try {
 			const db = await this.initDatabase();
-
+			if (!db) {
+				console.warn("Cubane: No IndexedDB available, skipping cache");
+				return null;
+			}
 			return new Promise((resolve) => {
 				const transaction = db.transaction(["resourcePacks"], "readonly");
 				const store = transaction.objectStore("resourcePacks");
@@ -188,6 +199,10 @@ export class Cubane {
 	): Promise<void> {
 		try {
 			const db = await this.initDatabase();
+			if (!db) {
+				console.warn("Cubane: No IndexedDB available, skipping cleanup");
+				return;
+			}
 
 			const transaction = db.transaction(["resourcePacks"], "readwrite");
 			const store = transaction.objectStore("resourcePacks");
@@ -339,7 +354,10 @@ export class Cubane {
 	> {
 		try {
 			const db = await this.initDatabase();
-
+			if (!db) {
+				console.warn("Cubane: No IndexedDB available, skipping listing");
+				return [];
+			}
 			return new Promise((resolve, reject) => {
 				const transaction = db.transaction(["resourcePacks"], "readonly");
 				const store = transaction.objectStore("resourcePacks");
@@ -449,7 +467,10 @@ export class Cubane {
 	public async deleteCachedPack(packId: string): Promise<boolean> {
 		try {
 			const db = await this.initDatabase();
-
+			if (!db) {
+				console.warn("Cubane: No IndexedDB available, skipping deletion");
+				return false;
+			}
 			return new Promise((resolve, reject) => {
 				const transaction = db.transaction(["resourcePacks"], "readwrite");
 				const store = transaction.objectStore("resourcePacks");
@@ -590,7 +611,7 @@ export class Cubane {
 
 			// Get entity mesh
 			const mesh = await this.entityRenderer.createEntityMesh(entityType);
-			
+
 			// Check if mesh is null or undefined
 			if (!mesh) {
 				console.warn(`No mesh created for entity: ${entityType}`);
