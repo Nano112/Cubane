@@ -1,10 +1,18 @@
 {
 	"name": "cubane",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "A Three.js-based Minecraft block and entity renderer with resource pack support",
 	"type": "module",
-	"main": "dist/index.js",
+	"main": "dist/cubane.umd.js",
+	"module": "dist/cubane.es.js",
 	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/cubane.es.js",
+			"require": "./dist/cubane.umd.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
 	"files": [
 		"dist",
 		"LICENSE",
@@ -12,7 +20,7 @@
 	],
 	"scripts": {
 		"dev": "vite",
-		"build": "tsc --project tsconfig.build.json && vite build",
+		"build": "tsc --resolveJsonModule --project tsconfig.build.json && vite build",
 		"build:types": "tsc --project tsconfig.build.json --emitDeclarationOnly",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm run build",
@@ -35,10 +43,6 @@
 	"homepage": "https://github.com/Nano112/cubane",
 	"bugs": {
 		"url": "https://github.com/Nano112/cubane/issues"
-	},
-	"devDependencies": {
-		"typescript": "~5.7.2",
-		"vite": "^6.3.1"
 	},
 	"dependencies": {
 		"jszip": "^3.10.1"
