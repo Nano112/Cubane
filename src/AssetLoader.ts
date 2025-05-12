@@ -352,7 +352,7 @@ export class AssetLoader {
 				};
 
 				// Get next parent or end the loop
-				parentPath = parentModel.parent || '';
+				parentPath = parentModel.parent || "";
 				depth++;
 			} catch (error) {
 				console.error(`Error parsing parent model ${parentPath}:`, error);
@@ -742,25 +742,41 @@ export class AssetLoader {
 		);
 		return this.createMissingTexture();
 	}
-	/**
-	 * Create a texture for missing textures
-	 */
 	private createMissingTexture(): THREE.Texture {
 		// Create a purple/black checkerboard for missing textures
 		const size = 16;
-		const canvas = document.createElement("canvas");
-		canvas.width = size;
-		canvas.height = size;
 
-		const ctx = canvas.getContext("2d")!;
-		ctx.fillStyle = "#FF00FF"; // Magenta
-		ctx.fillRect(0, 0, size, size);
+		// Create a data array for pixels
+		const data = new Uint8Array(size * size * 4);
 
-		ctx.fillStyle = "#000000"; // Black
-		ctx.fillRect(0, 0, size / 2, size / 2);
-		ctx.fillRect(size / 2, size / 2, size / 2, size / 2);
+		// Fill with magenta
+		for (let i = 0; i < size * size; i++) {
+			data[i * 4] = 255; // R
+			data[i * 4 + 1] = 0; // G
+			data[i * 4 + 2] = 255; // B
+			data[i * 4 + 3] = 255; // A
+		}
 
-		const texture = new THREE.CanvasTexture(canvas);
+		// Add black checkerboard pattern
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				if (
+					(x < size / 2 && y < size / 2) ||
+					(x >= size / 2 && y >= size / 2)
+				) {
+					const i = (y * size + x) * 4;
+					data[i] = 0; // R
+					data[i + 1] = 0; // G
+					data[i + 2] = 0; // B
+					data[i + 3] = 255; // A
+				}
+			}
+		}
+
+		// Create texture directly from pixel data
+		const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+
+		texture.needsUpdate = true;
 		texture.minFilter = THREE.NearestFilter;
 		texture.magFilter = THREE.NearestFilter;
 
