@@ -37,7 +37,10 @@ export default defineConfig(({ command }) => {
                         globals: {
                             three: 'THREE',
                             jszip: 'JSZip'
-                        }
+                        },
+                        exports: 'named',
+                        name: 'Cubane',
+                        inlineDynamicImports: true
                     }
                 }
             }
