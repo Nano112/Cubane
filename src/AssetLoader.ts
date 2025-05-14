@@ -538,9 +538,10 @@ export class AssetLoader {
 	public getTint(
 		blockId: string,
 		properties: Record<string, string>,
+		biome: string = "plains",
 		position?: THREE.Vector3
 	): THREE.Color {
-		return this.tintManager.getTint(blockId, properties, position);
+		return this.tintManager.getTint(blockId, properties, biome, position);
 	}
 
 	/**
