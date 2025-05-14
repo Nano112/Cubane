@@ -29,11 +29,6 @@ export class ModelResolver {
 			blockName
 		);
 
-		console.log(
-			`Resolving models for block ${blockName}`,
-			blockStateDefinition
-		);
-
 		// If no definition, return empty array
 		if (
 			!blockStateDefinition ||
@@ -73,8 +68,6 @@ export class ModelResolver {
 				// Sort for consistency and join with commas
 				variantKey = filteredProps.sort().join(",");
 			}
-
-			console.log(`Looking for variant: "${variantKey}"`);
 
 			// Try to find the variant with multiple approaches
 			let variant;
@@ -184,8 +177,14 @@ export class ModelResolver {
 					if ("OR" in part.when) {
 						// OR condition - any of the conditions can match
 						applies = false;
-						for (const condition of part.when.OR as BlockStateDefinitionVariant<string>[]) {
-							if (this.matchesCondition(block, condition as Record<string, string>)) {
+						for (const condition of part.when
+							.OR as BlockStateDefinitionVariant<string>[]) {
+							if (
+								this.matchesCondition(
+									block,
+									condition as Record<string, string>
+								)
+							) {
 								applies = true;
 								break;
 							}

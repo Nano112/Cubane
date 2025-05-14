@@ -6,6 +6,11 @@ import {
 	getGridHelper,
 	getSceneLights,
 } from "./SceneHelpers"; // Adjust path if necessary
+let isDragging = false;
+let mouseDownTime = 0;
+let mouseDownPosition = new THREE.Vector2();
+const CLICK_THRESHOLD_MS = 200; // Max duration for a click (milliseconds)
+const DRAG_THRESHOLD_PX = 5; // Max mouse movement for a click (pixels)
 
 // Initialize the scene
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -655,6 +660,196 @@ function updatePlacementMode(newMode: "add" | "move" | "delete") {
 	}
 }
 
+// Existing onMouseMove (now also handles drag detection)
+function onCanvasMouseMove(event: MouseEvent) {
+	// Changed parameter name to avoid conflict if you had onMouseMove elsewhere
+	if (event.target !== renderer.domElement) return;
+
+	// Drag detection logic
+	if (mouseDownTime > 0) {
+		// If mouse button is down (checked by mouseDownTime being set)
+		const deltaX = Math.abs(event.clientX - mouseDownPosition.x);
+		const deltaY = Math.abs(event.clientY - mouseDownPosition.y);
+		if (
+			!isDragging &&
+			(deltaX > DRAG_THRESHOLD_PX || deltaY > DRAG_THRESHOLD_PX)
+		) {
+			isDragging = true;
+			console.log("Drag detected"); // For debugging
+			// Hide preview mesh when dragging starts
+			if (previewMesh && placementMode === "add") {
+				previewMesh.visible = false;
+			}
+		}
+	}
+
+	// Original onMouseMove logic to update preview, etc.
+	// Only update preview if not dragging OR if it's part of move mode
+	if (isDragging && placementMode === "add" && previewMesh) {
+		if (previewMesh.visible) previewMesh.visible = false; // Keep it hidden during drag
+		return; // Don't update preview position during a camera drag
+	}
+
+	updateMousePointer(event); // updateMousePointer needs event as MouseEvent
+
+	const objectsToIntersect = [groundPlane, ...blocks.map((b) => b.mesh)];
+	const intersects = raycaster.intersectObjects(objectsToIntersect, true);
+
+	if (placementMode === "add" && previewMesh) {
+		if (intersects.length > 0) {
+			const placementPos = calculatePlacementPosition(intersects[0]);
+			if (placementPos) {
+				if (!previewMesh.visible) previewMesh.visible = true;
+				previewMesh.position.copy(placementPos);
+			} else {
+				if (previewMesh.visible) previewMesh.visible = false;
+			}
+		} else {
+			if (previewMesh.visible) previewMesh.visible = false;
+		}
+	} else if (placementMode === "move" && selectedBlockId) {
+		// Moving a block should still allow its preview to follow the cursor
+		const blockToMove = blocks.find((b) => b.id === selectedBlockId);
+		if (blockToMove) {
+			const otherBlocks = blocks
+				.filter((b) => b.id !== selectedBlockId)
+				.map((b) => b.mesh);
+			const moveIntersects = raycaster.intersectObjects(
+				[groundPlane, ...otherBlocks],
+				true
+			);
+			if (moveIntersects.length > 0) {
+				const placementPos = calculatePlacementPosition(moveIntersects[0]);
+				if (placementPos) {
+					blockToMove.mesh.position.copy(placementPos);
+				}
+			}
+		}
+	}
+}
+
+function onCanvasMouseDown(event: MouseEvent) {
+	if (event.target !== renderer.domElement) return;
+	// Only consider left mouse button for our click/drag logic for placement
+	if (event.button !== 0) return;
+
+	isDragging = false;
+	mouseDownTime = Date.now();
+	mouseDownPosition.set(event.clientX, event.clientY);
+	// console.log("Mouse Down"); // For debugging
+
+	// OrbitControls is already listening for mousedown.
+	// We don't want to interfere with its start.
+}
+
+function onCanvasMouseUp(event: MouseEvent) {
+	if (event.target !== renderer.domElement) return;
+	// Only consider left mouse button
+	if (event.button !== 0) return;
+
+	// console.log("Mouse Up. isDragging:", isDragging, "Controls state:", controls.state); // For debugging
+
+	const timeSinceMouseDown = Date.now() - mouseDownTime;
+
+	// Important: Reset mouseDownTime immediately so onCanvasMouseMove stops drag detection for this press
+	mouseDownTime = 0;
+
+	// Check if OrbitControls was actively being used OR if our drag flag is set
+	// OrbitControls.state: -1=NONE, 0=ROTATE, 1=DOLLY, 2=PAN
+	// The `controls.state` might not have reset to -1 yet by the time 'mouseup' fires,
+	// even if the user just finished a drag. So, `isDragging` is very important.
+	if (isDragging) {
+		// console.log("Drag finished, not a click."); // For debugging
+		isDragging = false; // Reset our flag
+		// After a drag, ensure the preview mesh is updated if in add mode
+		if (placementMode === "add" && previewMesh) {
+			onCanvasMouseMove(event); // Call mousemove to reposition/reshow preview
+		}
+		return;
+	}
+
+	// If it wasn't a drag by our definition, and it was short enough
+	if (timeSinceMouseDown < CLICK_THRESHOLD_MS) {
+		// AND OrbitControls wasn't in the middle of a camera operation initiated by another button/input
+		// (though our event.button check should mostly handle this for left click)
+		// A subtle point: if OrbitControls handles a very short drag as a click, it might also fire.
+		// The line `if (controls.state !== -1 && event.button === 0) return;` in your original onMouseClick
+		// was meant to prevent this. We can add a similar check here or in handleCanvasClick.
+
+		// console.log("Click detected, time:", timeSinceMouseDown); // For debugging
+		handleCanvasClickLogic(event); // Call your original click logic, renamed
+	} else {
+		// console.log("Long press, not a click, time:", timeSinceMouseDown); // For debugging
+	}
+
+	isDragging = false; // Reset our flag just in case
+}
+
+// Rename your existing onMouseClick to handleCanvasClickLogic
+// This function will contain the core logic of what happens on a "valid" click.
+function handleCanvasClickLogic(event: MouseEvent) {
+	// Accepts MouseEvent
+	// Your existing onMouseClick logic goes here, for example:
+	// console.log("handleCanvasClickLogic executed"); // For debugging
+
+	// Add this check here to be absolutely sure OrbitControls isn't overriding
+	// This state check is more reliable *after* OrbitControls has processed mouseup.
+	if (controls.enabled && controls.state !== -1 && event.button === 0) {
+		// console.log("OrbitControls still active, deferring click.");
+		return;
+	}
+
+	updateMousePointer(event); // Pass the MouseEvent
+
+	const blockMeshes = blocks.map((b) => b.mesh);
+	const objectsToIntersect = [groundPlane, ...blockMeshes];
+	const intersects = raycaster.intersectObjects(objectsToIntersect, true);
+
+	// ... (rest of your original onMouseClick logic for placement, move, delete, select)
+	if (placementMode === "add") {
+		if (intersects.length > 0) {
+			const placementPos = calculatePlacementPosition(intersects[0]);
+			if (placementPos) {
+				const blockInput = document.getElementById(
+					"blockInput"
+				) as HTMLInputElement;
+				if (blockInput && blockInput.value.trim()) {
+					addBlock(blockInput.value.trim(), placementPos);
+				} else {
+					updateStatus("Enter a block name to add.");
+				}
+			}
+		}
+	} else if (placementMode === "move" && selectedBlockId) {
+		const blockToMove = blocks.find((b) => b.id === selectedBlockId);
+		if (blockToMove) {
+			// Finalize move based on current mesh position (which was updated by mousemove)
+			moveBlock(selectedBlockId, blockToMove.mesh.position.clone());
+		}
+	} else if (placementMode === "delete") {
+		const deleteIntersects = raycaster.intersectObjects(blockMeshes, true);
+		if (deleteIntersects.length > 0) {
+			const clickedObject = deleteIntersects[0].object;
+			const blockId = clickedObject.userData.blockId;
+			if (blockId) {
+				removeBlock(blockId);
+			}
+		}
+	} else {
+		// Default selection mode
+		const selectIntersects = raycaster.intersectObjects(blockMeshes, true);
+		if (selectIntersects.length > 0) {
+			const clickedObject = selectIntersects[0].object;
+			const blockId = clickedObject.userData.blockId;
+			if (blockId) {
+				selectBlock(blockId);
+			}
+		} else {
+			selectBlock(null);
+		}
+	}
+}
+
 function setupEventListeners() {
 	document.getElementById("loadResourcePack")?.addEventListener("click", () => {
 		const input = document.createElement("input");
@@ -720,7 +915,11 @@ function setupEventListeners() {
 	});
 
 	canvas.addEventListener("mousemove", onMouseMove);
-	canvas.addEventListener("click", onMouseClick);
+	// canvas.addEventListener("click", onMouseClick);
+	canvas.addEventListener("mousedown", onCanvasMouseDown);
+	canvas.addEventListener("mouseup", onCanvasMouseUp);
+	canvas.addEventListener("mousemove", onCanvasMouseMove); // Your existing onMouseMove
+
 	canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
 	window.addEventListener("resize", onWindowResize);
