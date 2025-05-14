@@ -642,7 +642,7 @@ export class AssetLoader {
 		// Create the material with appropriate settings
 		const material = new THREE.MeshStandardMaterial({
 			map: texture,
-			transparent: options.transparent || options.isWater || false,
+			transparent: options.transparent || options.isWater || true,
 			opacity: options.isWater ? 0.8 : 1.0,
 			alphaTest: options.transparent && !options.isWater ? 0.5 : 0,
 			roughness: options.isWater && options.faceDirection === "up" ? 0.1 : 0.8,

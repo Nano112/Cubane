@@ -103,7 +103,6 @@ function initScene() {
 function updateStatus(message: string) {
 	const statusElement = document.getElementById("status");
 	if (statusElement) statusElement.textContent = message;
-	console.log(message);
 }
 
 function updateBlockList() {
@@ -194,11 +193,7 @@ async function addBlock(blockString: string, position: THREE.Vector3) {
 		return null;
 	}
 	try {
-		console.log(
-			`Requesting block mesh for "${blockString}" at position ${position.x},${position.y},${position.z}`
-		);
 		const mesh = await cubane.getBlockMesh(blockString);
-		console.log(`Received mesh from Cubane for "${blockString}":`, mesh);
 		if (!mesh) {
 			updateStatus(`Error: Cubane returned no mesh for "${blockString}"`);
 			return null;
@@ -221,12 +216,6 @@ async function addBlock(blockString: string, position: THREE.Vector3) {
 		};
 		blocks.push(blockData);
 		scene.add(mesh);
-		console.log(
-			`Added block "${blockString}" to scene with mesh:`,
-			mesh,
-			"BlockData:",
-			blockData
-		);
 
 		updateStatus(
 			`Added ${blockString} at ${position.x}, ${position.y}, ${position.z}`
@@ -304,44 +293,19 @@ function calculatePlacementPosition(
 	}
 
 	let placementPos: THREE.Vector3;
-	console.log(
-		"Calculating placement. Intersected object name:",
-		intersection.object.name
-	);
 
 	if (intersection.object === groundPlane) {
 		placementPos = intersection.point.clone();
 		placementPos.x = Math.floor(intersection.point.x / GRID_SIZE) * GRID_SIZE;
 		placementPos.y = 0;
 		placementPos.z = Math.floor(intersection.point.z / GRID_SIZE) * GRID_SIZE;
-		console.log(
-			"Placing on groundPlane. Raw point:",
-			intersection.point.toArray().join(", "),
-			"-> Calculated pos:",
-			placementPos.toArray().join(", ")
-		);
 	} else {
 		const blockId = intersection.object.userData.blockId;
 		const targetBlock = blocks.find((b) => b.id === blockId);
 
 		if (targetBlock) {
-			console.log(
-				"Placing on existing block. Target ID:",
-				blockId,
-				"Target Pos:",
-				targetBlock.position.toArray().join(", ")
-			);
-			console.log(
-				"Intersection Face Normal:",
-				intersection.face.normal.toArray().join(", ")
-			);
 			const offset = intersection.face.normal.clone().multiplyScalar(GRID_SIZE);
-			console.log("Calculated Offset:", offset.toArray().join(", "));
 			placementPos = targetBlock.position.clone().add(offset);
-			console.log(
-				"Raw placementPos (target.pos + offset):",
-				placementPos.toArray().join(", ")
-			);
 		} else {
 			console.warn(
 				"calculatePlacementPosition: Intersected a non-ground object but could not find its BlockData. Object:",
@@ -356,11 +320,9 @@ function calculatePlacementPosition(
 		Math.round(placementPos.y),
 		Math.round(placementPos.z)
 	);
-	console.log("Final Rounded placementPos:", finalPos.toArray().join(", "));
 	return finalPos;
 }
 
-// ... (rest of your loadResourcePackFromFile, updatePreviewMesh, etc. functions remain the same)
 async function loadResourcePackFromFile(file: File) {
 	try {
 		updateStatus("Loading resource pack...");
