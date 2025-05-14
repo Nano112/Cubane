@@ -10,16 +10,14 @@ export default defineConfig(({ command }) => {
     };
 
     if (command === 'serve') {
-        // Development configuration
         return {
             ...config,
-            root: './dev',  // Set root directory to dev for development server
+            root: './dev',
             server: {
-                open: true,   // Automatically open browser
+                open: true,
             }
         };
     } else {
-        // Build configuration (unchanged)
         return {
             ...config,
             build: {

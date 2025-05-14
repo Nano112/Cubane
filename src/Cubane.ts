@@ -497,8 +497,7 @@ export class Cubane {
 	 */
 	public async getBlockMesh(
 		blockString: string,
-		biome: string = "plains",
-		position?: THREE.Vector3
+		biome: string = "plains"
 	): Promise<THREE.Object3D> {
 		if (!this.initialized) {
 			await this.initPromise;
@@ -507,12 +506,16 @@ export class Cubane {
 		try {
 			console.log(`Creating mesh for block: ${blockString}`);
 
-			// Parse block string
 			const block = this.parseBlockString(blockString);
 			console.log("Parsed block:", block);
 
-			// Check if this is a block entity
 			const blockId = `${block.namespace}:${block.name}`;
+
+			const isEntity = blockId.startsWith("entity:");
+			if (isEntity) {
+				const entityType = blockId.replace("entity:", "");
+				return this.getEntityMesh(entityType);
+			}
 			if (this.blockEntityMap[blockId]) {
 				return this.getEntityMesh(this.blockEntityMap[blockId]);
 			}
@@ -566,23 +569,19 @@ export class Cubane {
 			// If only one object, return it
 			if (objects.length === 1) {
 				const obj = objects[0];
-				if (position) {
-					obj.position.copy(position);
-				}
+				console.log(obj);
 				return obj;
 			}
 
 			// For multiple objects, create a parent group
 			const group = new THREE.Group();
+
 			objects.forEach((obj) => group.add(obj.clone()));
 
 			// Store block and biome information
 			(group as any).blockData = block;
 			(group as any).biome = biome;
-			if (position) {
-				group.position.copy(position);
-			}
-
+			console.log(group);
 			// Set name for debugging
 			group.name = `block_${block.name.replace("minecraft:", "")}`;
 
@@ -598,10 +597,7 @@ export class Cubane {
 	 * @param entityType Entity type name (e.g., "chest", "creeper")
 	 * @param position Optional position for the entity
 	 */
-	public async getEntityMesh(
-		entityType: string,
-		position?: THREE.Vector3
-	): Promise<THREE.Object3D> {
+	public async getEntityMesh(entityType: string): Promise<THREE.Object3D> {
 		if (!this.initialized) {
 			await this.initPromise;
 		}
@@ -616,10 +612,6 @@ export class Cubane {
 			if (!mesh) {
 				console.warn(`No mesh created for entity: ${entityType}`);
 				return this.createFallbackMesh();
-			}
-
-			if (position) {
-				mesh.position.copy(position);
 			}
 
 			// Set name for debugging

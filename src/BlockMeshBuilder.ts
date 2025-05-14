@@ -60,6 +60,7 @@ export class BlockMeshBuilder {
 					blockData,
 					biome
 				);
+				elementMesh.position.set(0.5, 0.5, 0.5);
 				group.add(elementMesh);
 			} catch (error) {
 				console.error("Error creating element mesh:", error);
@@ -90,7 +91,6 @@ export class BlockMeshBuilder {
 			(group as any).isWater = isWater;
 			(group as any).isLava = isLiquid && !isWater;
 		}
-
 		return group;
 	}
 
