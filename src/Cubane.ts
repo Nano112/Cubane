@@ -333,13 +333,10 @@ export class Cubane {
 			await this.initPromise;
 		}
 
-		// console.log(`Cubane: Creating mesh for block: ${blockString}`);
 		const block = this.parseBlockString(blockString);
 		const blockId = `${block.namespace}:${block.name}`;
 
-		// Handle pure entity blocks first
 		if (this.pureBlockEntityMap[blockId]) {
-			// console.log(`Cubane: Rendering ${blockId} as pure entity: ${this.pureBlockEntityMap[blockId]}`);
 			return this.getEntityMesh(this.pureBlockEntityMap[blockId]);
 		}
 
@@ -446,10 +443,7 @@ export class Cubane {
 		}
 		try {
 			// console.log(`Cubane: Creating mesh for entity: ${entityType}`);
-			const mesh = await this.entityRenderer.createEntityMesh(
-				entityType,
-				this.assetLoader
-			); // Pass AssetLoader if needed
+			const mesh = await this.entityRenderer.createEntityMesh(entityType);
 			if (!mesh) {
 				console.warn(`No mesh created by EntityRenderer for: ${entityType}`);
 				return this.createFallbackMesh("entity_" + entityType);

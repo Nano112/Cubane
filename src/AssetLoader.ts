@@ -23,7 +23,6 @@ export class AssetLoader {
 	constructor() {
 		this.animatedTextureManager = new AnimatedTextureManager(this);
 		this.tintManager = new TintManager();
-		console.log("AssetLoader initialized");
 	}
 
 	/**
@@ -31,15 +30,12 @@ export class AssetLoader {
 	 */
 	public async loadResourcePack(blob: Blob): Promise<void> {
 		try {
-			console.log("Loading resource pack...");
 			const zip = await JSZip.loadAsync(blob);
 
 			// Log structure for debugging
 			const assetFiles = Object.keys(zip.files).filter(
 				(path) => path.includes("assets/minecraft/") && !zip.files[path].dir
 			);
-
-			console.log(`Resource pack has ${assetFiles.length} assets`);
 
 			// Log some sample files for debugging
 			const blockstates = assetFiles.filter((path) =>
@@ -48,26 +44,12 @@ export class AssetLoader {
 			const models = assetFiles.filter((path) => path.includes("models/"));
 			const textures = assetFiles.filter((path) => path.includes("textures/"));
 
-			console.log(`Found ${blockstates.length} blockstate files`);
-			console.log(`Found ${models.length} model files`);
-			console.log(`Found ${textures.length} texture files`);
-
-			if (blockstates.length > 0) {
-				console.log("Sample blockstates:", blockstates.slice(0, 5));
-			}
-
-			if (models.length > 0) {
-				console.log("Sample models:", models.slice(0, 5));
-			}
-
 			// Generate a unique ID for this resource pack
 			const packId = `pack_${Date.now()}`;
 			this.resourcePacks.set(packId, zip);
 
 			// Add to the front of the order list for priority
 			this.resourcePackOrder.unshift(packId);
-
-			console.log(`Resource pack loaded with ID: ${packId}`);
 		} catch (error) {
 			console.error("Failed to load resource pack:", error);
 			throw error;
@@ -141,8 +123,6 @@ export class AssetLoader {
 			return this.blockStateCache.get(cacheKey)!;
 		}
 
-		console.log(`Loading blockstate for ${blockId}`);
-
 		// Load from resource pack
 		const jsonString = await this.getResourceString(
 			`blockstates/${blockId}.json`
@@ -174,8 +154,6 @@ export class AssetLoader {
 			return this.modelCache.get(cacheKey)!;
 		}
 
-		console.log(`Loading model: ${modelPath}`);
-
 		// Special handling for liquid models with level information
 		if (
 			modelPath.startsWith("block/water") ||
@@ -188,9 +166,6 @@ export class AssetLoader {
 			const levelMatch = modelPath.match(/_level_(\d+)/);
 			if (levelMatch) {
 				level = parseInt(levelMatch[1], 10);
-				console.log(
-					`Detected liquid level ${level} from model path: ${modelPath}`
-				);
 			}
 
 			// Calculate liquid height based on level
@@ -201,12 +176,6 @@ export class AssetLoader {
 
 			// Special case: water source blocks are 14px high, not 16px
 			const actualHeight = isWater && level === 0 ? 14 : liquidHeight;
-
-			console.log(
-				`Creating ${
-					isWater ? "water" : "lava"
-				} model with height: ${actualHeight}/16 for level ${level}`
-			);
 
 			// Create an enhanced liquid model
 			const liquidModel: BlockModel = {
@@ -250,11 +219,6 @@ export class AssetLoader {
 					jsonString = await this.getResourceString(
 						`models/${baseModelPath}.json`
 					);
-					if (jsonString) {
-						console.log(
-							`Using base liquid model for level variant: ${baseModelPath}`
-						);
-					}
 				}
 
 				if (jsonString) {
@@ -263,23 +227,17 @@ export class AssetLoader {
 
 					// Merge textures, keeping our specific ones if not overridden
 					if (originalModel.textures) {
-						console.log(`Merging original model textures with enhanced model`);
 						Object.assign(liquidModel.textures || {}, originalModel.textures);
 					}
 
 					// If original model has elements but we're dealing with a level-specific variant,
 					// don't use them since we need our custom height
 					if (originalModel.elements && !levelMatch) {
-						console.log(`Using original model elements from ${modelPath}`);
 						liquidModel.elements = originalModel.elements;
 					}
 				}
 			} catch (error) {
 				console.warn(`Error loading original liquid model: ${error}`);
-			}
-
-			if (!originalModelFound) {
-				console.log(`No original model found, using enhanced liquid model`);
 			}
 
 			// Cache and return the enhanced model
@@ -324,8 +282,6 @@ export class AssetLoader {
 		while (parentPath && depth < MAX_DEPTH) {
 			// Fix: Remove "minecraft:" prefix if present in parent path
 			parentPath = parentPath.replace("minecraft:", "");
-
-			console.log(`Loading parent model: ${parentPath}`);
 
 			// Now try to load the model with the correct path
 			const parentModelString = await this.getResourceString(
@@ -423,20 +379,7 @@ export class AssetLoader {
 		// Check cache first
 		const cacheKey = `texture:${texturePath}`;
 		if (this.textureCache.has(cacheKey)) {
-			console.log(`Using cached texture: ${texturePath}`);
 			return this.textureCache.get(cacheKey)!;
-		}
-
-		console.log(`Attempting to load texture: ${texturePath}`);
-
-		// Special handling for liquid textures
-		if (
-			texturePath === "block/water_still" ||
-			texturePath === "block/water_flow" ||
-			texturePath === "block/lava_still" ||
-			texturePath === "block/lava_flow"
-		) {
-			console.log(`Loading special liquid texture: ${texturePath}`);
 		}
 
 		// Check for animation
@@ -448,7 +391,7 @@ export class AssetLoader {
 			const animatedTexture =
 				await this.animatedTextureManager.createAnimatedTexture(texturePath);
 			if (animatedTexture) {
-				console.log(`Successfully created animated texture for ${texturePath}`);
+				`Successfully created animated texture for ${texturePath}`;
 				this.textureCache.set(cacheKey, animatedTexture);
 				return animatedTexture;
 			} else {
@@ -462,7 +405,6 @@ export class AssetLoader {
 		const fullPath = texturePath.endsWith(".png")
 			? texturePath
 			: `${texturePath}.png`;
-		console.log(`Looking for texture at: textures/${fullPath}`);
 
 		// Load texture blob from resource pack
 		const blob = await this.getResourceBlob(`textures/${fullPath}`);
@@ -473,12 +415,8 @@ export class AssetLoader {
 			if (texturePath.startsWith("block/")) {
 				// Try without the "block/" prefix
 				const altPath = texturePath.replace("block/", "");
-				console.log(`Trying alternate path: textures/${altPath}.png`);
 				const altBlob = await this.getResourceBlob(`textures/${altPath}.png`);
 				if (altBlob) {
-					console.log(
-						`Found texture at alternate path: textures/${altPath}.png`
-					);
 					// Continue with this blob
 					return this.createTextureFromBlob(altBlob, cacheKey);
 				}
@@ -524,8 +462,6 @@ export class AssetLoader {
 				);
 			});
 
-			console.log(`Successfully loaded texture: ${texturePath}`);
-			// Cache the texture
 			this.textureCache.set(cacheKey, texture);
 
 			return texture;
@@ -723,16 +659,11 @@ export class AssetLoader {
 		// Try each possible path
 		for (const path of texturePaths) {
 			try {
-				console.log(`Trying texture path: ${path}`);
 				const texture = await this.getTexture(path);
 				if (texture) {
-					console.log(`Successfully loaded texture from ${path}`);
 					return texture;
 				}
-			} catch (error) {
-				console.log(`Failed to load texture from ${path}`);
-				// Continue to next path
-			}
+			} catch (error) {}
 		}
 
 		// If we reach here, all paths failed
@@ -804,7 +735,5 @@ export class AssetLoader {
 		// Clear resource packs
 		this.resourcePacks.clear();
 		this.resourcePackOrder = [];
-
-		console.log("AssetLoader disposed");
 	}
 }

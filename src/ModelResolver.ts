@@ -19,7 +19,6 @@ export class ModelResolver {
 			block.name === "lava" ||
 			block.name === "flowing_lava"
 		) {
-			console.log(`Handling special liquid block: ${block.name}`);
 			return this.createLiquidModelData(block);
 		}
 
@@ -79,7 +78,6 @@ export class ModelResolver {
 
 			// Second approach: If not found and using empty variant
 			else if (!variant && blockStateDefinition.variants[""]) {
-				console.log(`Variant "${variantKey}" not found, using default variant`);
 				variant = blockStateDefinition.variants[""];
 			}
 
@@ -127,9 +125,6 @@ export class ModelResolver {
 
 				// If we found a matching variant, use it
 				if (bestVariantKey) {
-					console.log(
-						`Found best matching variant: ${bestVariantKey} for requested ${variantKey}`
-					);
 					variant = blockStateDefinition.variants[bestVariantKey];
 				}
 
@@ -139,7 +134,6 @@ export class ModelResolver {
 					for (const [key, value] of Object.entries(block.properties)) {
 						const singlePropKey = `${key}=${value}`;
 						if (blockStateDefinition.variants[singlePropKey]) {
-							console.log(`Using single property variant: ${singlePropKey}`);
 							variant = blockStateDefinition.variants[singlePropKey];
 							break;
 						}
@@ -149,9 +143,7 @@ export class ModelResolver {
 				// Fifth approach: use first available variant
 				if (!variant && variantKeys.length > 0) {
 					const firstKey = variantKeys[0];
-					console.log(
-						`No matching variant found, using first available: ${firstKey}`
-					);
+
 					variant = blockStateDefinition.variants[firstKey];
 				}
 			}
@@ -228,8 +220,6 @@ export class ModelResolver {
 			: level === 0
 			? "block/lava"
 			: `block/lava_level_${level}`;
-
-		console.log(`Creating liquid model: ${modelPath} with level ${level}`);
 
 		return [
 			{

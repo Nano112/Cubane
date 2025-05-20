@@ -47,10 +47,6 @@ export class EntityRenderer {
 					bytes.buffer,
 					"",
 					(gltf: { scene: THREE.Object3D }) => {
-						if (this.debug) {
-							console.log(`Loaded entity model: ${entityName}`);
-						}
-
 						// Apply any transformations or setup here if needed
 						const model = gltf.scene;
 						const group = new THREE.Group();
