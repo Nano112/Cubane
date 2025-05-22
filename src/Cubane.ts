@@ -28,6 +28,10 @@ export class Cubane {
 	private dbName: string = "cubane-cache";
 	private dbVersion: number = 1;
 
+	// Mesh caching
+	private blockMeshCache: Map<string, THREE.Object3D> = new Map();
+	private entityMeshCache: Map<string, THREE.Object3D> = new Map();
+
 	// Block entity mapping for blocks that are *purely* entities
 	private pureBlockEntityMap: Record<string, string> = {
 		"minecraft:chest": "chest",
@@ -190,6 +194,8 @@ export class Cubane {
 		if (options instanceof Blob) {
 			await this.assetLoader.loadResourcePack(options);
 			this.lastPackLoadedFromCache = false; // Not from cache
+			// Clear mesh caches when new resource pack is loaded
+			this.clearMeshCaches();
 			return;
 		}
 		const defaultOptions: ResourcePackLoadOptions = {
@@ -231,6 +237,8 @@ export class Cubane {
 		if (!resourcePackBlob)
 			throw new Error("Failed to load or retrieve resource pack blob");
 		await this.assetLoader.loadResourcePack(resourcePackBlob);
+		// Clear mesh caches when new resource pack is loaded
+		this.clearMeshCaches();
 	}
 	public async listCachedResourcePacks(): Promise<
 		Array<{ id: string; name: string; size: number; timestamp: number }>
@@ -294,6 +302,8 @@ export class Cubane {
 			}
 			await this.assetLoader.loadResourcePack(blob);
 			this.lastPackLoadedFromCache = true;
+			// Clear mesh caches when new resource pack is loaded
+			this.clearMeshCaches();
 			return true;
 		} catch (error) {
 			console.error(`Error loading cached pack ${packId}:`, error);
@@ -325,19 +335,45 @@ export class Cubane {
 
 	public lastPackLoadedFromCache: boolean = false;
 
+	/**
+	 * Get a block mesh with optional caching
+	 * @param blockString The block string (e.g., "minecraft:stone[variant=smooth]")
+	 * @param biome The biome for tinting (default: "plains")
+	 * @param useCache Whether to use cached meshes (default: true)
+	 * @returns Promise<THREE.Object3D> The block mesh
+	 */
 	public async getBlockMesh(
 		blockString: string,
-		biome: string = "plains"
+		biome: string = "plains",
+		useCache: boolean = true
 	): Promise<THREE.Object3D> {
 		if (!this.initialized) {
 			await this.initPromise;
 		}
 
+		// Create cache key that includes biome for proper caching
+		const cacheKey = `${blockString}:${biome}`;
+
+		// Check cache first if enabled
+		if (useCache && this.blockMeshCache.has(cacheKey)) {
+			const cachedMesh = this.blockMeshCache.get(cacheKey)!;
+			// Return a clone to avoid modifying the cached mesh
+			return cachedMesh.clone();
+		}
+
 		const block = this.parseBlockString(blockString);
 		const blockId = `${block.namespace}:${block.name}`;
 
+		// Handle pure block entities
 		if (this.pureBlockEntityMap[blockId]) {
-			return this.getEntityMesh(this.pureBlockEntityMap[blockId]);
+			const entityMesh = await this.getEntityMesh(
+				this.pureBlockEntityMap[blockId],
+				useCache
+			);
+			if (useCache) {
+				this.blockMeshCache.set(cacheKey, entityMesh.clone());
+			}
+			return entityMesh;
 		}
 
 		// Create a root group for the combined mesh (static + dynamic)
@@ -396,7 +432,10 @@ export class Cubane {
 			const dynamicPartsConfig = this.hybridBlockConfig[blockId];
 			for (const partConfig of dynamicPartsConfig) {
 				try {
-					const dynamicMesh = await this.getEntityMesh(partConfig.entityType);
+					const dynamicMesh = await this.getEntityMesh(
+						partConfig.entityType,
+						useCache
+					);
 					if (dynamicMesh) {
 						if (partConfig.offset) {
 							dynamicMesh.position.set(
@@ -431,29 +470,124 @@ export class Cubane {
 			console.warn(
 				`Cubane: No parts rendered for ${blockId}, returning fallback.`
 			);
-			return this.createFallbackMesh();
+			const fallback = this.createFallbackMesh();
+			if (useCache) {
+				this.blockMeshCache.set(cacheKey, fallback.clone());
+			}
+			return fallback;
+		}
+
+		// Cache the mesh if caching is enabled
+		if (useCache) {
+			this.blockMeshCache.set(cacheKey, rootGroup.clone());
 		}
 
 		return rootGroup;
 	}
 
-	public async getEntityMesh(entityType: string): Promise<THREE.Object3D> {
+	/**
+	 * Get an entity mesh with optional caching
+	 * @param entityType The entity type
+	 * @param useCache Whether to use cached meshes (default: true)
+	 * @returns Promise<THREE.Object3D> The entity mesh
+	 */
+	public async getEntityMesh(
+		entityType: string,
+		useCache: boolean = true
+	): Promise<THREE.Object3D> {
 		if (!this.initialized) {
 			await this.initPromise;
 		}
+
+		// Check cache first if enabled
+		if (useCache && this.entityMeshCache.has(entityType)) {
+			const cachedMesh = this.entityMeshCache.get(entityType)!;
+			// Return a clone to avoid modifying the cached mesh
+			const clonedMesh = cachedMesh.clone();
+			clonedMesh.name = `entity_${entityType}`;
+			return clonedMesh;
+		}
+
 		try {
 			// console.log(`Cubane: Creating mesh for entity: ${entityType}`);
 			const mesh = await this.entityRenderer.createEntityMesh(entityType);
 			if (!mesh) {
 				console.warn(`No mesh created by EntityRenderer for: ${entityType}`);
-				return this.createFallbackMesh("entity_" + entityType);
+				const fallback = this.createFallbackMesh("entity_" + entityType);
+				if (useCache) {
+					this.entityMeshCache.set(entityType, fallback.clone());
+				}
+				return fallback;
 			}
 			mesh.name = `entity_${entityType}`;
+
+			// Cache the mesh if caching is enabled
+			if (useCache) {
+				this.entityMeshCache.set(entityType, mesh.clone());
+			}
+
 			return mesh;
 		} catch (error) {
 			console.error(`Error creating entity mesh ${entityType}:`, error);
-			return this.createFallbackMesh("entity_" + entityType);
+			const fallback = this.createFallbackMesh("entity_" + entityType);
+			if (useCache) {
+				this.entityMeshCache.set(entityType, fallback.clone());
+			}
+			return fallback;
 		}
+	}
+
+	/**
+	 * Clear all mesh caches
+	 */
+	public clearMeshCaches(): void {
+		this.blockMeshCache.clear();
+		this.entityMeshCache.clear();
+		console.log("Cubane: Mesh caches cleared");
+	}
+
+	/**
+	 * Clear block mesh cache only
+	 */
+	public clearBlockMeshCache(): void {
+		this.blockMeshCache.clear();
+		console.log("Cubane: Block mesh cache cleared");
+	}
+
+	/**
+	 * Clear entity mesh cache only
+	 */
+	public clearEntityMeshCache(): void {
+		this.entityMeshCache.clear();
+		console.log("Cubane: Entity mesh cache cleared");
+	}
+
+	/**
+	 * Get cache statistics
+	 */
+	public getCacheStats(): { blockMeshCount: number; entityMeshCount: number } {
+		return {
+			blockMeshCount: this.blockMeshCache.size,
+			entityMeshCount: this.entityMeshCache.size,
+		};
+	}
+
+	/**
+	 * Check if a block mesh is cached
+	 */
+	public isBlockMeshCached(
+		blockString: string,
+		biome: string = "plains"
+	): boolean {
+		const cacheKey = `${blockString}:${biome}`;
+		return this.blockMeshCache.has(cacheKey);
+	}
+
+	/**
+	 * Check if an entity mesh is cached
+	 */
+	public isEntityMeshCached(entityType: string): boolean {
+		return this.entityMeshCache.has(entityType);
 	}
 
 	public registerBlockEntity(blockId: string, entityType: string): void {
@@ -542,5 +676,6 @@ export class Cubane {
 	}
 	public dispose(): void {
 		this.assetLoader.dispose();
+		this.clearMeshCaches();
 	}
 }
