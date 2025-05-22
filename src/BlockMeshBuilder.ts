@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { AssetLoader } from "./AssetLoader"; // Adjust path if necessary
-import { Block, BlockModel, BlockModelElement } from "./types"; // Adjust path if necessary
+import { AssetLoader } from "./AssetLoader";
+import { Block, BlockModel, BlockModelElement } from "./types";
 
 const FACING_UV_ROT: Record<string, 0 | 90 | 180 | 270> = {
 	south: 180,
@@ -10,6 +10,14 @@ const FACING_UV_ROT: Record<string, 0 | 90 | 180 | 270> = {
 	up: 180,
 	down: 180,
 };
+
+interface GeometryGroup {
+	geometry: THREE.BufferGeometry;
+	material: THREE.Material;
+	isLiquid?: boolean;
+	isWater?: boolean;
+	isLava?: boolean;
+}
 
 export class BlockMeshBuilder {
 	private assetLoader: AssetLoader;
@@ -29,10 +37,7 @@ export class BlockMeshBuilder {
 		block?: Block,
 		biome: string = "plains"
 	): Promise<THREE.Object3D> {
-		// console.log("Creating mesh for model:", model.parent || 'base model');
-
 		if (!model.elements || model.elements.length === 0) {
-			// console.warn("Model has no elements, creating placeholder");
 			return this.createPlaceholderCube();
 		}
 
@@ -40,106 +45,141 @@ export class BlockMeshBuilder {
 		const isLiquid = blockData && this.isLiquidBlock(blockData);
 		const isWater = blockData && this.isWaterBlock(blockData);
 
-		const group = new THREE.Group(); // This group's (0,0,0) will be the block's min_x, min_y, min_z
+		// Collect all geometries grouped by material
+		const geometryGroups = new Map<string, GeometryGroup>();
 
 		for (const element of model.elements) {
 			try {
-				const elementMesh = await this.createElementMesh(
+				const elementGeometries = await this.createElementGeometries(
 					element,
 					model,
 					blockData,
 					biome
 				);
-				group.add(elementMesh); // Add directly, elementMesh is already in 0-1 local block space
+
+				// Group geometries by material key
+				for (const {
+					geometry,
+					material,
+					materialKey,
+					isLiquid,
+					isWater,
+					isLava,
+				} of elementGeometries) {
+					if (!geometryGroups.has(materialKey)) {
+						geometryGroups.set(materialKey, {
+							geometry: new THREE.BufferGeometry(),
+							material: material,
+							isLiquid,
+							isWater,
+							isLava,
+						});
+					}
+
+					// Merge this geometry into the group
+					const group = geometryGroups.get(materialKey)!;
+					group.geometry = this.mergeGeometries([group.geometry, geometry]);
+				}
 			} catch (error) {
-				console.error(
-					"Error creating element mesh:",
-					error,
-					"for element:",
-					element,
-					"in model:",
-					model
-				);
+				console.error("Error creating element geometries:", error);
 			}
 		}
 
-		if (transform.y !== undefined) {
-			group.rotateY((transform.y * Math.PI) / 180);
-		}
-		if (transform.x !== undefined) {
-			group.rotateX((transform.x * Math.PI) / 180);
+		// Create final group with merged meshes
+		const finalGroup = new THREE.Group();
+
+		for (const [
+			materialKey,
+			{ geometry, material, isLiquid, isWater, isLava },
+		] of geometryGroups) {
+			if (
+				geometry.attributes.position &&
+				geometry.attributes.position.count > 0
+			) {
+				const mesh = new THREE.Mesh(geometry, material);
+
+				if (isLiquid) {
+					mesh.userData.isLiquid = true;
+					mesh.userData.isWater = isWater;
+					mesh.userData.isLava = isLava;
+					mesh.renderOrder = isWater ? 1 : 0;
+				}
+
+				finalGroup.add(mesh);
+			}
 		}
 
-		if (group.children.length === 0) {
-			// console.warn("Group is empty after processing elements, creating placeholder");
+		// Apply transforms
+		if (transform.y !== undefined) {
+			finalGroup.rotateY((transform.y * Math.PI) / 180);
+		}
+		if (transform.x !== undefined) {
+			finalGroup.rotateX((transform.x * Math.PI) / 180);
+		}
+
+		if (finalGroup.children.length === 0) {
 			return this.createPlaceholderCube();
 		}
 
+		// Add metadata
 		if (blockData) {
-			(group as any).blockData = blockData;
+			(finalGroup as any).blockData = blockData;
 		}
-		(group as any).biome = biome;
+		(finalGroup as any).biome = biome;
 		if (isLiquid) {
-			(group as any).isLiquid = true;
-			(group as any).isWater = isWater;
-			(group as any).isLava = isLiquid && !isWater;
+			(finalGroup as any).isLiquid = true;
+			(finalGroup as any).isWater = isWater;
+			(finalGroup as any).isLava = isLiquid && !isWater;
 		}
-		return group;
+
+		return finalGroup;
 	}
 
-	private isLiquidBlock(blockData?: Block): boolean {
-		if (!blockData) return false;
-		const blockId = `${blockData.namespace}:${blockData.name}`;
-		return blockId.includes("water") || blockId.includes("lava");
-	}
-
-	private isWaterBlock(blockData?: Block): boolean {
-		if (!blockData) return false;
-		const blockId = `${blockData.namespace}:${blockData.name}`;
-		return blockId.includes("water") && !blockId.includes("waterlogged");
-	}
-
-	private isLavaBlock(blockData?: Block): boolean {
-		if (!blockData) return false;
-		const blockId = `${blockData.namespace}:${blockData.name}`;
-		return blockId.includes("lava");
-	}
-
-	private async createElementMesh(
+	private async createElementGeometries(
 		element: BlockModelElement,
 		model: BlockModel,
 		blockData?: Block,
 		biome: string = "plains"
-	): Promise<THREE.Object3D> {
+	): Promise<
+		Array<{
+			geometry: THREE.BufferGeometry;
+			material: THREE.Material;
+			materialKey: string;
+			isLiquid?: boolean;
+			isWater?: boolean;
+			isLava?: boolean;
+		}>
+	> {
 		const fromJSON = element.from || [0, 0, 0];
 		const toJSON = element.to || [16, 16, 16];
 
 		const from = fromJSON.map((c) => c / 16);
 		const to = toJSON.map((c) => c / 16);
 
-		let size = [
-			// Mutable if water
-			to[0] - from[0],
-			to[1] - from[1],
-			to[2] - from[2],
-		];
+		let size = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
 
 		let center = [
-			// Mutable if water
 			from[0] + size[0] / 2,
 			from[1] + size[1] / 2,
 			from[2] + size[2] / 2,
 		];
 
+		// Water level adjustment
 		if (blockData && this.isWaterBlock(blockData) && toJSON[1] === 16) {
-			// Compare with original 0-16 scale
 			const adjustedToY_mc = 14;
 			to[1] = adjustedToY_mc / 16;
 			size[1] = to[1] - from[1];
 			center[1] = from[1] + size[1] / 2;
 		}
 
-		const elementGeometryGroup = new THREE.Group();
+		const geometries: Array<{
+			geometry: THREE.BufferGeometry;
+			material: THREE.Material;
+			materialKey: string;
+			isLiquid?: boolean;
+			isWater?: boolean;
+			isLava?: boolean;
+		}> = [];
 
 		if (element.faces) {
 			const faceDirections = [
@@ -150,75 +190,57 @@ export class BlockMeshBuilder {
 				"west",
 				"east",
 			] as const;
+
 			for (const direction of faceDirections) {
 				const faceData = element.faces[direction];
 				if (!faceData) continue;
 
-				const faceMesh = await this.createFaceMesh(
-					direction,
-					size,
-					faceData,
-					model,
-					blockData,
-					biome
-				);
-				elementGeometryGroup.add(faceMesh);
+				const { geometry, material, materialKey, isLiquid, isWater, isLava } =
+					await this.createFaceGeometry(
+						direction,
+						size,
+						faceData,
+						model,
+						blockData,
+						biome
+					);
+
+				// Apply transformations to geometry
+				this.applyElementTransforms(geometry, element, center, size, direction);
+
+				geometries.push({
+					geometry,
+					material,
+					materialKey,
+					isLiquid,
+					isWater,
+					isLava,
+				});
 			}
 		}
 
-		let finalElementMesh: THREE.Object3D;
-
-		if (element.rotation) {
-			const rotationGroup = new THREE.Group();
-			const rotationOriginJSON = element.rotation.origin || [8, 8, 8];
-			const rotationOrigin = rotationOriginJSON.map((c) => c / 16);
-
-			rotationGroup.position.set(
-				rotationOrigin[0],
-				rotationOrigin[1],
-				rotationOrigin[2]
-			);
-
-			elementGeometryGroup.position.set(
-				center[0] - rotationOrigin[0],
-				center[1] - rotationOrigin[1],
-				center[2] - rotationOrigin[2]
-			);
-
-			rotationGroup.add(elementGeometryGroup);
-
-			const angle = (element.rotation.angle * Math.PI) / 180;
-			switch (element.rotation.axis) {
-				case "x":
-					rotationGroup.rotateX(angle);
-					break;
-				case "y":
-					rotationGroup.rotateY(angle);
-					break;
-				case "z":
-					rotationGroup.rotateZ(angle);
-					break;
-			}
-			finalElementMesh = rotationGroup;
-		} else {
-			elementGeometryGroup.position.set(center[0], center[1], center[2]);
-			finalElementMesh = elementGeometryGroup;
-		}
-
-		return finalElementMesh;
+		return geometries;
 	}
 
-	private async createFaceMesh(
+	private async createFaceGeometry(
 		direction: string,
 		size: number[],
 		faceData: any,
 		model: BlockModel,
 		blockData?: Block,
 		biome?: string
-	): Promise<THREE.Mesh> {
+	): Promise<{
+		geometry: THREE.BufferGeometry;
+		material: THREE.Material;
+		materialKey: string;
+		isLiquid?: boolean;
+		isWater?: boolean;
+		isLava?: boolean;
+	}> {
 		let geometry: THREE.PlaneGeometry;
 		let position: [number, number, number] = [0, 0, 0];
 
+		// Create geometry based on direction
 		switch (direction) {
 			case "down":
 				geometry = new THREE.PlaneGeometry(size[0], size[2]);
@@ -253,28 +275,145 @@ export class BlockMeshBuilder {
 				throw new Error(`Unknown face direction: ${direction}`);
 		}
 
+		// Apply position to geometry
+		geometry.translate(...position);
+
+		// Map UV coordinates
 		this.mapUVCoordinates(geometry, direction, faceData);
 
+		// Get texture and material
 		let texturePath = this.assetLoader.resolveTexture(faceData.texture, model);
 		const isWater = this.isWaterBlock(blockData);
 		const isLava = this.isLavaBlock(blockData);
 		const isLiquid = isWater || isLava;
 
 		if (isWater) {
-			if (direction === "up" || direction === "down")
-				texturePath = "block/water_still";
-			else texturePath = "block/water_flow";
+			texturePath =
+				direction === "up" || direction === "down"
+					? "block/water_still"
+					: "block/water_flow";
 		} else if (isLava) {
-			if (direction === "up" || direction === "down")
-				texturePath = "block/lava_still";
-			else texturePath = "block/lava_flow";
+			texturePath =
+				direction === "up" || direction === "down"
+					? "block/lava_still"
+					: "block/lava_flow";
 		}
 
-		let material: THREE.Material;
+		// Create material
+		const material = await this.createFaceMaterial(
+			texturePath,
+			direction,
+			faceData,
+			model,
+			blockData,
+			biome,
+			size,
+			isLiquid,
+			isWater,
+			isLava
+		);
+
+		// Create a unique key for this material combination
+		const materialKey = this.getMaterialKey(
+			texturePath,
+			direction,
+			faceData,
+			blockData,
+			biome
+		);
+
+		return {
+			geometry: geometry,
+			material,
+			materialKey,
+			isLiquid,
+			isWater,
+			isLava,
+		};
+	}
+
+	private applyElementTransforms(
+		geometry: THREE.BufferGeometry,
+		element: BlockModelElement,
+		center: number[],
+		size: number[],
+		direction: string
+	): void {
+		if (element.rotation) {
+			const rotationOriginJSON = element.rotation.origin || [8, 8, 8];
+			const rotationOrigin = rotationOriginJSON.map((c) => c / 16);
+
+			// Translate to center first
+			geometry.translate(center[0], center[1], center[2]);
+
+			// Then translate to rotation origin
+			geometry.translate(
+				-rotationOrigin[0],
+				-rotationOrigin[1],
+				-rotationOrigin[2]
+			);
+
+			// Apply rotation
+			const angle = (element.rotation.angle * Math.PI) / 180;
+			switch (element.rotation.axis) {
+				case "x":
+					geometry.rotateX(angle);
+					break;
+				case "y":
+					geometry.rotateY(angle);
+					break;
+				case "z":
+					geometry.rotateZ(angle);
+					break;
+			}
+
+			// Translate back from rotation origin
+			geometry.translate(
+				rotationOrigin[0],
+				rotationOrigin[1],
+				rotationOrigin[2]
+			);
+		} else {
+			// Just translate to center
+			geometry.translate(center[0], center[1], center[2]);
+		}
+	}
+
+	private getMaterialKey(
+		texturePath: string,
+		direction: string,
+		faceData: any,
+		blockData?: Block,
+		biome?: string
+	): string {
+		const tintIndex =
+			faceData.tintindex !== undefined ? faceData.tintindex : "none";
+		const blockId = blockData
+			? `${blockData.namespace}:${blockData.name}`
+			: "none";
+		const props = blockData?.properties
+			? JSON.stringify(blockData.properties)
+			: "none";
+
+		return `${texturePath}_${direction}_${tintIndex}_${blockId}_${props}_${biome}`;
+	}
+
+	private async createFaceMaterial(
+		texturePath: string,
+		direction: string,
+		faceData: any,
+		model: BlockModel,
+		blockData?: Block,
+		biome?: string,
+		size?: number[],
+		isLiquid?: boolean,
+		isWater?: boolean,
+		isLava?: boolean
+	): Promise<THREE.Material> {
 		try {
 			const isTransparentTexture =
 				texturePath.includes("glass") || texturePath.includes("leaves");
-			const effectiveTransparent = isTransparentTexture || isWater; // Water is transparent
+			const effectiveTransparent = isTransparentTexture || isWater;
 
 			let tint: THREE.Color | undefined = undefined;
 			if (blockData && faceData.tintindex !== undefined) {
@@ -294,84 +433,188 @@ export class BlockMeshBuilder {
 				biome: biome,
 			};
 
-			material = await this.assetLoader.getMaterial(
+			const material = await this.assetLoader.getMaterial(
 				texturePath,
 				materialOptions
 			);
+			const clonedMaterial = material.clone();
 
-			if (material instanceof THREE.Material) {
-				material = material.clone();
+			// Set material properties
+			const isThinElementHeuristic =
+				size && (size[0] < 0.01 || size[1] < 0.01 || size[2] < 0.01);
+			const isKnownThinTexture =
+				texturePath.includes("tendril") ||
+				texturePath.includes("pane") ||
+				texturePath.includes("fence") ||
+				texturePath.includes("rail") ||
+				texturePath.includes("door") ||
+				texturePath.includes("trapdoor") ||
+				texturePath.includes("ladder");
 
-				const isThinElementHeuristic =
-					size[0] < 0.01 || size[1] < 0.01 || size[2] < 0.01;
-				const isKnownThinTexture =
-					texturePath.includes("tendril") ||
-					texturePath.includes("pane") ||
-					texturePath.includes("fence") ||
-					texturePath.includes("rail") ||
-					texturePath.includes("door") ||
-					texturePath.includes("trapdoor") ||
-					texturePath.includes("ladder");
-
-				if (isThinElementHeuristic || isKnownThinTexture) {
-					material.side = THREE.DoubleSide;
-				} else {
-					material.side = THREE.FrontSide;
-				}
-				// Ensure transparency is set correctly if material indicates it or it's water
-				if (effectiveTransparent) {
-					material.transparent = true;
-				}
-
-				if (isWater) {
-					// material.transparent = true; // Already handled by effectiveTransparent
-					material.opacity =
-						materialOptions.opacity !== undefined
-							? materialOptions.opacity
-							: 0.8; // Use opacity from options if provided, else default
-					material.userData.isWater = true;
-					material.userData.faceDirection = direction;
-					if (
-						direction === "up" &&
-						material instanceof THREE.MeshStandardMaterial
-					) {
-						material.roughness = 0.1;
-						material.metalness = 0.3;
-					}
-				}
-				if (isLava && material instanceof THREE.MeshStandardMaterial) {
-					material.emissive = new THREE.Color(0xff2200);
-					material.emissiveIntensity = 0.5;
-					material.roughness = 0.7;
-					material.userData.isLava = true;
-					material.userData.faceDirection = direction;
-				}
+			if (isThinElementHeuristic || isKnownThinTexture) {
+				clonedMaterial.side = THREE.DoubleSide;
 			} else {
-				// Should not happen if getMaterial resolves
-				throw new Error(
-					"AssetLoader.getMaterial did not return a THREE.Material instance"
-				);
+				clonedMaterial.side = THREE.FrontSide;
 			}
+
+			if (effectiveTransparent) {
+				clonedMaterial.transparent = true;
+			}
+
+			if (isWater) {
+				clonedMaterial.opacity =
+					materialOptions.opacity !== undefined ? materialOptions.opacity : 0.8;
+				clonedMaterial.userData.isWater = true;
+				clonedMaterial.userData.faceDirection = direction;
+				if (
+					direction === "up" &&
+					clonedMaterial instanceof THREE.MeshStandardMaterial
+				) {
+					clonedMaterial.roughness = 0.1;
+					clonedMaterial.metalness = 0.3;
+				}
+			}
+
+			if (isLava && clonedMaterial instanceof THREE.MeshStandardMaterial) {
+				clonedMaterial.emissive = new THREE.Color(0xff2200);
+				clonedMaterial.emissiveIntensity = 0.5;
+				clonedMaterial.roughness = 0.7;
+				clonedMaterial.userData.isLava = true;
+				clonedMaterial.userData.faceDirection = direction;
+			}
+
+			return clonedMaterial;
 		} catch (error) {
 			console.warn(`Failed to create material for ${texturePath}:`, error);
-			material = new THREE.MeshStandardMaterial({
+			return new THREE.MeshStandardMaterial({
 				color: 0xff00ff,
 				wireframe: true,
 				side: THREE.DoubleSide,
 			});
 		}
+	}
 
-		const mesh = new THREE.Mesh(geometry, material);
-		mesh.position.set(...position);
+	private mergeGeometries(
+		geometries: THREE.BufferGeometry[]
+	): THREE.BufferGeometry {
+		// Filter out empty geometries
+		const validGeometries = geometries.filter(
+			(geo) => geo.attributes.position && geo.attributes.position.count > 0
+		);
 
-		if (isLiquid) {
-			mesh.userData.isLiquid = true;
-			mesh.userData.isWater = isWater;
-			mesh.userData.isLava = isLava;
-			mesh.userData.faceDirection = direction;
-			mesh.renderOrder = isWater ? 1 : 0;
+		if (validGeometries.length === 0) {
+			return new THREE.BufferGeometry();
 		}
-		return mesh;
+
+		if (validGeometries.length === 1) {
+			return validGeometries[0];
+		}
+
+		// Use THREE.js BufferGeometryUtils if available, otherwise manual merge
+		if ((THREE as any).BufferGeometryUtils) {
+			return (THREE as any).BufferGeometryUtils.mergeGeometries(
+				validGeometries
+			);
+		} else {
+			// Manual merge (simplified - you might want to import BufferGeometryUtils)
+			return this.manualMergeGeometries(validGeometries);
+		}
+	}
+
+	private manualMergeGeometries(
+		geometries: THREE.BufferGeometry[]
+	): THREE.BufferGeometry {
+		const merged = new THREE.BufferGeometry();
+
+		let totalVertices = 0;
+		let totalIndices = 0;
+
+		// Calculate totals
+		for (const geometry of geometries) {
+			totalVertices += geometry.attributes.position.count;
+			if (geometry.index) {
+				totalIndices += geometry.index.count;
+			} else {
+				totalIndices += geometry.attributes.position.count;
+			}
+		}
+
+		// Create merged arrays
+		const positions = new Float32Array(totalVertices * 3);
+		const normals = new Float32Array(totalVertices * 3);
+		const uvs = new Float32Array(totalVertices * 2);
+		const indices = new Uint32Array(totalIndices);
+
+		let vertexOffset = 0;
+		let indexOffset = 0;
+		let currentVertexCount = 0;
+
+		for (const geometry of geometries) {
+			const positionAttr = geometry.attributes.position;
+			const normalAttr = geometry.attributes.normal;
+			const uvAttr = geometry.attributes.uv;
+
+			// Copy positions
+			positions.set(positionAttr.array as Float32Array, vertexOffset * 3);
+
+			// Copy normals if they exist
+			if (normalAttr) {
+				normals.set(normalAttr.array as Float32Array, vertexOffset * 3);
+			}
+
+			// Copy UVs if they exist
+			if (uvAttr) {
+				uvs.set(uvAttr.array as Float32Array, vertexOffset * 2);
+			}
+
+			// Copy indices
+			if (geometry.index) {
+				const geometryIndices = geometry.index.array;
+				for (let i = 0; i < geometryIndices.length; i++) {
+					indices[indexOffset + i] = geometryIndices[i] + currentVertexCount;
+				}
+				indexOffset += geometryIndices.length;
+			} else {
+				// Generate indices for non-indexed geometry
+				for (let i = 0; i < positionAttr.count; i++) {
+					indices[indexOffset + i] = currentVertexCount + i;
+				}
+				indexOffset += positionAttr.count;
+			}
+
+			currentVertexCount += positionAttr.count;
+			vertexOffset += positionAttr.count;
+		}
+
+		// Set attributes
+		merged.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+		merged.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+		merged.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+		merged.setIndex(new THREE.BufferAttribute(indices, 1));
+
+		// Compute normals if they weren't provided
+		merged.computeVertexNormals();
+
+		return merged;
+	}
+
+	// Keep existing helper methods
+	private isLiquidBlock(blockData?: Block): boolean {
+		if (!blockData) return false;
+		const blockId = `${blockData.namespace}:${blockData.name}`;
+		return blockId.includes("water") || blockId.includes("lava");
+	}
+
+	private isWaterBlock(blockData?: Block): boolean {
+		if (!blockData) return false;
+		const blockId = `${blockData.namespace}:${blockData.name}`;
+		return blockId.includes("water") && !blockId.includes("waterlogged");
+	}
+
+	private isLavaBlock(blockData?: Block): boolean {
+		if (!blockData) return false;
+		const blockId = `${blockData.namespace}:${blockData.name}`;
+		return blockId.includes("lava");
 	}
 
 	private mapUVCoordinates(
@@ -380,7 +623,6 @@ export class BlockMeshBuilder {
 		faceData: any
 	): void {
 		if (!faceData.uv) {
-			// Default UVs (0,0 to 1,1) will be used by PlaneGeometry
 			return;
 		}
 		const uvAttribute = geometry.attributes.uv as THREE.BufferAttribute;
@@ -391,7 +633,6 @@ export class BlockMeshBuilder {
 			uMax / 16,
 			vMax / 16
 		);
-		// Ensure FACING_UV_ROT access is safe for potentially undefined keys
 		const baseRotation =
 			FACING_UV_ROT[direction as keyof typeof FACING_UV_ROT] ?? 0;
 		const rot = ((faceData.rotation ?? 0) + baseRotation) % 360;
@@ -399,7 +640,7 @@ export class BlockMeshBuilder {
 		if (rot !== 0) {
 			this.applyUVRotation(uvCoords, rot);
 		}
-		uvAttribute.array.set(uvCoords); // Use .array.set for direct manipulation
+		uvAttribute.array.set(uvCoords);
 		uvAttribute.needsUpdate = true;
 	}
 
@@ -409,51 +650,25 @@ export class BlockMeshBuilder {
 		u2: number,
 		v2: number
 	): Float32Array {
-		// Standard PlaneGeometry UV order: (0,1) (1,1) (0,0) (1,0) for vertices BL, BR, TL, TR
-		// Our desired output for .set needs to match this if we directly set.
-		// Minecraft UV: u1,v1 is top-left; u2,v2 is bottom-right of the texture area.
-		// Three.js UV: (0,0) is bottom-left; (1,1) is top-right of the texture.
-		// So, v1_three = 1 - v1_mc, v2_three = 1 - v2_mc
-		// Let's map to the order PlaneGeometry vertices are defined:
-		// Vertices: bottom-left, bottom-right, top-left, top-right (in its local XY before rotation)
-		// Corresponding UVs:
-		return new Float32Array([
-			u1,
-			1 - v2, // Corresponds to vertex at (localX_min, localY_min) -> UV (uMin, vMax_inverted)
-			u2,
-			1 - v2, // Corresponds to vertex at (localX_max, localY_min) -> UV (uMax, vMax_inverted)
-			u1,
-			1 - v1, // Corresponds to vertex at (localX_min, localY_max) -> UV (uMin, vMin_inverted)
-			u2,
-			1 - v1, // Corresponds to vertex at (localX_max, localY_max) -> UV (uMax, vMin_inverted)
-		]);
+		return new Float32Array([u1, 1 - v2, u2, 1 - v2, u1, 1 - v1, u2, 1 - v1]);
 	}
 
 	private applyUVRotation(uvCoords: Float32Array, rotation: number): void {
-		// Assumes uvCoords is [u0,v0, u1,v1, u2,v2, u3,v3] for vertices BL, BR, TL, TR of the plane
 		const temp = new Float32Array(uvCoords);
 		switch (rotation) {
 			case 0:
 				break;
-			case 90: // Rotate UVs 90 degrees clockwise around center of UV area
-				// BL (0) -> TL (2)
-				// BR (1) -> BL (0)
-				// TL (2) -> TR (3)
-				// TR (3) -> BR (1)
+			case 90:
 				uvCoords[0] = temp[4];
-				uvCoords[1] = temp[5]; // BL takes TL's UV
+				uvCoords[1] = temp[5];
 				uvCoords[2] = temp[0];
-				uvCoords[3] = temp[1]; // BR takes BL's UV
+				uvCoords[3] = temp[1];
 				uvCoords[4] = temp[6];
-				uvCoords[5] = temp[7]; // TL takes TR's UV
+				uvCoords[5] = temp[7];
 				uvCoords[6] = temp[2];
-				uvCoords[7] = temp[3]; // TR takes BR's UV
+				uvCoords[7] = temp[3];
 				break;
 			case 180:
-				// BL (0) -> TR (3)
-				// BR (1) -> TL (2)
-				// TL (2) -> BR (1)
-				// TR (3) -> BL (0)
 				uvCoords[0] = temp[6];
 				uvCoords[1] = temp[7];
 				uvCoords[2] = temp[4];
@@ -464,10 +679,6 @@ export class BlockMeshBuilder {
 				uvCoords[7] = temp[1];
 				break;
 			case 270:
-				// BL (0) -> BR (1)
-				// BR (1) -> TR (3)
-				// TL (2) -> BL (0)
-				// TR (3) -> TL (2)
 				uvCoords[0] = temp[2];
 				uvCoords[1] = temp[3];
 				uvCoords[2] = temp[6];
