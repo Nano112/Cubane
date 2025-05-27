@@ -12,6 +12,7 @@ export class TintManager {
 		// Foliage
 		this.tintableBlocks.set("minecraft:grass_block", "foliage");
 		this.tintableBlocks.set("minecraft:oak_leaves", "foliage");
+		this.tintableBlocks.set("minecraft:vine", "foliage");
 		this.tintableBlocks.set("minecraft:birch_leaves", "foliage");
 		this.tintableBlocks.set("minecraft:spruce_leaves", "foliage");
 		this.tintableBlocks.set("minecraft:jungle_leaves", "foliage");

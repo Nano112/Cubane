@@ -59,7 +59,10 @@ export class AssetLoader {
 	/**
 	 * Get a string resource (JSON files, etc.)
 	 */
-	public async getResourceString(path: string): Promise<string | undefined> {
+	public async getResourceString(
+		path: string,
+		silent: boolean = true
+	): Promise<string | undefined> {
 		// Check cache first
 		const cacheKey = `string:${path}`;
 		if (this.stringCache.has(cacheKey)) {
@@ -78,12 +81,16 @@ export class AssetLoader {
 					this.stringCache.set(cacheKey, content);
 					return content;
 				} catch (error) {
-					console.warn(`Error reading ${path} from pack ${packId}:`, error);
+					if (!silent) {
+						console.error(`Error reading ${path} from pack ${packId}:`, error);
+					}
 				}
 			}
 		}
 
-		console.warn(`Resource not found: ${path}`);
+		if (!silent) {
+			console.warn(`Resource not found: ${path}`);
+		}
 		return undefined;
 	}
 
@@ -578,12 +585,11 @@ export class AssetLoader {
 		// Create the material with appropriate settings
 		const material = new THREE.MeshStandardMaterial({
 			map: texture,
-			transparent: options.transparent || options.isWater || true,
+			transparent: true,
 			opacity: options.isWater ? 0.8 : 1.0,
-			alphaTest: options.transparent && !options.isWater ? 0.5 : 0,
-			roughness: options.isWater && options.faceDirection === "up" ? 0.1 : 0.8,
-			metalness: options.isWater && options.faceDirection === "up" ? 0.3 : 0.1,
-			side: THREE.DoubleSide, // Use double-sided for liquids and transparent materials
+			alphaTest: 0.5,
+
+			side: THREE.FrontSide, // Use double-sided for liquids and transparent materials
 		});
 
 		// Apply tint if provided

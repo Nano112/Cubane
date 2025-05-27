@@ -351,38 +351,35 @@ export class Cubane {
 			await this.initPromise;
 		}
 
-		// Create cache key that includes biome for proper caching
 		const cacheKey = `${blockString}:${biome}`;
 
-		// Check cache first if enabled
 		if (useCache && this.blockMeshCache.has(cacheKey)) {
 			const cachedMesh = this.blockMeshCache.get(cacheKey)!;
-			// Return a clone to avoid modifying the cached mesh
-			return cachedMesh.clone();
+			return cachedMesh.clone(); // Return a clone for safety
 		}
 
 		const block = this.parseBlockString(blockString);
 		const blockId = `${block.namespace}:${block.name}`;
 
-		// Handle pure block entities
 		if (this.pureBlockEntityMap[blockId]) {
 			const entityMesh = await this.getEntityMesh(
 				this.pureBlockEntityMap[blockId],
 				useCache
 			);
+			// For pure entities, the entityMesh is the final block mesh.
+			// It might already have its own internal origin and structure.
 			if (useCache) {
+				// Clone before caching as getEntityMesh might also return a clone from its cache
 				this.blockMeshCache.set(cacheKey, entityMesh.clone());
 			}
-			return entityMesh;
+			return entityMesh; // Already cloned if from entity cache, or the original if newly created
 		}
 
-		// Create a root group for the combined mesh (static + dynamic)
 		const rootGroup = new THREE.Group();
 		rootGroup.name = `block_${block.name.replace("minecraft:", "")}`;
-		(rootGroup as any).blockData = block; // Store block data for main.ts
+		(rootGroup as any).blockData = block;
 		(rootGroup as any).biome = biome;
 
-		// Attempt to render the static JSON model part
 		let staticModelRendered = false;
 		try {
 			const modelDataList = await this.modelResolver.resolveBlockModel(block);
@@ -390,45 +387,65 @@ export class Cubane {
 				const objectPromises = modelDataList.map(async (modelData) => {
 					try {
 						const modelJson = await this.assetLoader.getModel(modelData.model);
-						return await this.blockMeshBuilder.createBlockMesh(
-							modelJson,
-							{ x: modelData.x, y: modelData.y, uvlock: modelData.uvlock },
-							block,
-							biome
-						);
+
+						// --- MODIFICATION START ---
+						// Pass only uvlock and block data for BlockMeshBuilder to use internally.
+						// x and y rotations will be applied to the object returned by BlockMeshBuilder.
+						const baseBlockPartObject =
+							await this.blockMeshBuilder.createBlockMesh(
+								modelJson,
+								{
+									// x: undefined, // Explicitly not passing x rotation
+									// y: undefined, // Explicitly not passing y rotation
+									uvlock: modelData.uvlock,
+								},
+								block, // Pass block data for context
+								biome
+							);
+
+						// Apply blockstate rotations (modelData.x, modelData.y) here
+						// to the Object3D returned by BlockMeshBuilder.
+						if (modelData.y !== undefined && modelData.y !== 0) {
+							baseBlockPartObject.rotateY(-(modelData.y * Math.PI) / 180);
+						}
+						if (modelData.x !== undefined && modelData.x !== 0) {
+							baseBlockPartObject.rotateX(-(modelData.x * Math.PI) / 180);
+						}
+						// --- MODIFICATION END ---
+
+						return baseBlockPartObject; // This is the (now rotated if needed) part
 					} catch (modelError) {
 						console.error(
-							`Error creating mesh for sub-model ${modelData.model}:`,
+							`Error creating mesh for sub-model ${modelData.model} of ${blockString}:`,
 							modelError
 						);
 						return null;
 					}
 				});
+
 				const staticParts = (await Promise.all(objectPromises)).filter(
 					Boolean
 				) as THREE.Object3D[];
 
-				if (staticParts.length === 1) {
-					rootGroup.add(staticParts[0]);
-				} else if (staticParts.length > 1) {
-					// If resolveBlockModel returns multiple models (e.g. multipart),
-					// BlockMeshBuilder should ideally return a single group for each,
-					// or this logic needs to handle combining them.
-					// For now, assuming createBlockMesh returns a single root for its model.
-					staticParts.forEach((part) => rootGroup.add(part));
-				}
+				// Add all static parts to the rootGroup.
+				// Each part is now an Object3D that has its blockstate rotation applied.
+				// Their internal element rotations were baked by BlockMeshBuilder.
+				staticParts.forEach((part) => {
+					// Ensure part is valid before adding
+					if (part && part.isObject3D) {
+						rootGroup.add(part);
+					}
+				});
 				staticModelRendered = rootGroup.children.length > 0;
 			}
 		} catch (error) {
 			console.warn(
-				`Cubane: Error resolving/rendering static model for ${blockId}:`,
+				`Cubane: Error resolving/rendering static model for ${blockId} (${blockString}):`,
 				error
 			);
 		}
 
-		// Check for and render dynamic parts if it's a hybrid block
 		if (this.hybridBlockConfig[blockId]) {
-			// console.log(`Cubane: Rendering dynamic parts for hybrid block ${blockId}`);
 			const dynamicPartsConfig = this.hybridBlockConfig[blockId];
 			for (const partConfig of dynamicPartsConfig) {
 				try {
@@ -439,9 +456,13 @@ export class Cubane {
 					if (dynamicMesh) {
 						if (partConfig.offset) {
 							dynamicMesh.position.set(
-								partConfig.offset[0],
-								partConfig.offset[1],
-								partConfig.offset[2]
+								partConfig.offset[0] - 0.5, // Assuming hybrid offsets are 0-1, convert to -0.5 to 0.5 if block is centered
+								partConfig.offset[1] - 0.5,
+								partConfig.offset[2] - 0.5
+								// If your block models from BlockMeshBuilder are already centered,
+								// and hybrid parts are also designed to be centered or relative to center,
+								// you might not need the -0.5. Test this.
+								// Or, if offsets are in MC coords (0-16), divide by 16 then subtract 0.5.
 							);
 						}
 						if (partConfig.rotation) {
@@ -451,7 +472,6 @@ export class Cubane {
 								THREE.MathUtils.degToRad(partConfig.rotation[2])
 							);
 						}
-						// Tag it for animation updates if necessary
 						dynamicMesh.userData.isDynamicBlockPart = true;
 						dynamicMesh.userData.entityType = partConfig.entityType;
 						rootGroup.add(dynamicMesh);
@@ -465,23 +485,28 @@ export class Cubane {
 			}
 		}
 
-		// If nothing was rendered (neither static nor dynamic for a hybrid), return fallback
 		if (rootGroup.children.length === 0) {
 			console.warn(
-				`Cubane: No parts rendered for ${blockId}, returning fallback.`
+				`Cubane: No parts rendered for ${blockId} (${blockString}), returning fallback.`
 			);
-			const fallback = this.createFallbackMesh();
+			// The fallback mesh is simple and has no internal rotations to worry about.
+			// If you cache it, clone it.
+			const fallback = this.createFallbackMesh(`block_fallback_${blockId}`);
 			if (useCache) {
 				this.blockMeshCache.set(cacheKey, fallback.clone());
 			}
 			return fallback;
 		}
 
-		// Cache the mesh if caching is enabled
 		if (useCache) {
+			// The rootGroup now contains all parts, correctly transformed.
+			// Cache a clone of this assembled rootGroup.
 			this.blockMeshCache.set(cacheKey, rootGroup.clone());
 		}
 
+		// rootGroup itself is at origin (0,0,0) with no rotation.
+		// Its children (the block parts) have their blockstate rotations.
+		// The meshes within those children have their element rotations baked into vertices.
 		return rootGroup;
 	}
 
