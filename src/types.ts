@@ -59,6 +59,7 @@ export interface BlockModelElement {
 		origin: [number, number, number];
 		axis: "x" | "y" | "z";
 		angle: number;
+		rescale?: boolean;
 	};
 	faces?: {
 		[face in "down" | "up" | "north" | "south" | "west" | "east"]?: {

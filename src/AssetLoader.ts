@@ -30,30 +30,70 @@ export class AssetLoader {
 	 */
 	public async loadResourcePack(blob: Blob): Promise<void> {
 		try {
-			const zip = await JSZip.loadAsync(blob);
+			console.log("🔍 Loading resource pack from blob...");
 
-			// Log structure for debugging
+			// Ensure fully loaded and safe Blob
+			const arrayBuffer = await blob.arrayBuffer();
+			console.log("📦 Blob size:", arrayBuffer.byteLength, "type:", blob.type);
+
+			// Optional: Verify ZIP signature at start
+			const header = new Uint8Array(arrayBuffer.slice(0, 4));
+			if (
+				header[0] !== 0x50 ||
+				header[1] !== 0x4b ||
+				header[2] !== 0x03 ||
+				header[3] !== 0x04
+			) {
+				throw new Error("❌ Invalid ZIP: missing PK\x03\x04 header");
+			}
+
+			// Optional: Verify EOCD record at the end
+			const eocdOffset = this.findEOCD(arrayBuffer);
+			if (eocdOffset === -1) {
+				throw new Error("❌ ZIP missing End of Central Directory (EOCD)");
+			}
+			console.log("📍 EOCD found at byte offset:", eocdOffset);
+
+			// Pass raw buffer to JSZip directly
+			const zip = await JSZip.loadAsync(arrayBuffer);
+			console.log("✅ ZIP loaded, entries:", Object.keys(zip.files).length);
+
+			// Filter and log structure
 			const assetFiles = Object.keys(zip.files).filter(
 				(path) => path.includes("assets/minecraft/") && !zip.files[path].dir
 			);
+			const blockstates = assetFiles.filter((p) => p.includes("blockstates/"));
+			const models = assetFiles.filter((p) => p.includes("models/"));
+			const textures = assetFiles.filter((p) => p.includes("textures/"));
 
-			// Log some sample files for debugging
-			const blockstates = assetFiles.filter((path) =>
-				path.includes("blockstates/")
-			);
-			const models = assetFiles.filter((path) => path.includes("models/"));
-			const textures = assetFiles.filter((path) => path.includes("textures/"));
+			console.log("📁 blockstates:", blockstates.length);
+			console.log("📁 models:", models.length);
+			console.log("📁 textures:", textures.length);
 
-			// Generate a unique ID for this resource pack
+			// Register pack
 			const packId = `pack_${Date.now()}`;
 			this.resourcePacks.set(packId, zip);
-
-			// Add to the front of the order list for priority
 			this.resourcePackOrder.unshift(packId);
 		} catch (error) {
-			console.error("Failed to load resource pack:", error);
+			console.error("❌ Failed to load resource pack:", error);
 			throw error;
 		}
+	}
+
+	// Detect EOCD location for ZIP validity
+	private findEOCD(buffer: ArrayBuffer): number {
+		const view = new Uint8Array(buffer);
+		for (let i = buffer.byteLength - 22; i >= 0; i--) {
+			if (
+				view[i] === 0x50 && // P
+				view[i + 1] === 0x4b && // K
+				view[i + 2] === 0x05 &&
+				view[i + 3] === 0x06
+			) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	/**

@@ -37,6 +37,28 @@ export class BlockMeshBuilder {
 		block?: Block,
 		biome: string = "plains"
 	): Promise<THREE.Object3D> {
+		const blockData = block || transform.block;
+
+		// Check if this block is waterlogged
+		if (blockData?.properties?.waterlogged === "true") {
+			return this.createWaterloggedBlockMesh(model, transform, block, biome);
+		}
+
+		// Otherwise, create normal block
+		return this.createBlockMeshNoWater(model, transform, block, biome);
+	}
+
+	public async createBlockMeshNoWater(
+		model: BlockModel,
+		transform: {
+			x?: number;
+			y?: number;
+			uvlock?: boolean;
+			block?: Block;
+		} = {},
+		block?: Block,
+		biome: string = "plains"
+	): Promise<THREE.Object3D> {
 		if (!model.elements || model.elements.length === 0) {
 			return this.createPlaceholderCube();
 		}
@@ -143,6 +165,100 @@ export class BlockMeshBuilder {
 		}
 
 		return finalGroup;
+	}
+
+	// Add this method to your BlockMeshBuilder class
+	public async createWaterloggedBlockMesh(
+		model: BlockModel,
+		transform: {
+			x?: number;
+			y?: number;
+			uvlock?: boolean;
+			block?: Block;
+		} = {},
+		block?: Block,
+		biome: string = "plains"
+	): Promise<THREE.Object3D> {
+		const blockData = block || transform.block;
+
+		// Create the main block mesh
+		const mainBlockMesh = await this.createBlockMeshNoWater(
+			model,
+			transform,
+			block,
+			biome
+		);
+
+		// Check if this block is waterlogged
+		const isWaterlogged = blockData?.properties?.waterlogged === "true";
+
+		if (!isWaterlogged) {
+			return mainBlockMesh;
+		}
+
+		// Create a container group for both the block and water
+		const waterloggedGroup = new THREE.Group();
+
+		// Add the main block
+		waterloggedGroup.add(mainBlockMesh);
+
+		// Create water block - use a simple cube model for water
+		const waterModel: BlockModel = {
+			elements: [
+				{
+					from: [0, 0, 0],
+					to: [16, 16, 16],
+					faces: {
+						down: { texture: "block/water_still" },
+						up: { texture: "block/water_still" },
+						north: { texture: "block/water_flow" },
+						south: { texture: "block/water_flow" },
+						west: { texture: "block/water_flow" },
+						east: { texture: "block/water_flow" },
+					},
+				},
+			],
+		};
+
+		// Create water block data
+		const waterBlock: Block = {
+			namespace: "minecraft",
+			name: "water",
+			properties: {},
+		};
+
+		// Create the water mesh
+		const waterMesh = await this.createBlockMesh(
+			waterModel,
+			transform,
+			waterBlock,
+			biome
+		);
+
+		// Set water-specific properties
+		if (waterMesh instanceof THREE.Group) {
+			waterMesh.children.forEach((child) => {
+				if (child instanceof THREE.Mesh) {
+					// Ensure water renders after solid blocks
+					child.renderOrder = 1;
+					// Make sure water material is properly transparent
+					if (child.material instanceof THREE.Material) {
+						child.material.transparent = true;
+						child.material.depthWrite = false;
+					}
+				}
+			});
+		}
+
+		// Add water to the group
+		waterloggedGroup.add(waterMesh);
+
+		// Add metadata to indicate this is waterlogged
+		(waterloggedGroup as any).isWaterlogged = true;
+		(waterloggedGroup as any).blockData = blockData;
+		(waterloggedGroup as any).biome = biome;
+
+		return waterloggedGroup;
 	}
 
 	private async createElementGeometries(
@@ -366,11 +482,47 @@ export class BlockMeshBuilder {
 			// Translate geometry so the local pivot is at origin
 			geometry.translate(-pivotLocalX, -pivotLocalY, -pivotLocalZ);
 
+			// Apply rescaling if specified
+			if (element.rotation.rescale) {
+				const angle = (element.rotation.angle * Math.PI) / 180;
+				const rescaleFactor = 1 / Math.cos(angle);
+
+				// Apply rescaling to the geometry vertices
+				const positionAttribute = geometry.attributes
+					.position as THREE.BufferAttribute;
+				const positions = positionAttribute.array as Float32Array;
+
+				// Rescale coordinates perpendicular to the rotation axis
+				for (let i = 0; i < positions.length; i += 3) {
+					const x = positions[i];
+					const y = positions[i + 1];
+					const z = positions[i + 2];
+
+					switch (element.rotation.axis) {
+						case "x":
+							// Rescale Y and Z coordinates
+							positions[i + 1] = y * rescaleFactor;
+							positions[i + 2] = z * rescaleFactor;
+							break;
+						case "y":
+							// Rescale X and Z coordinates
+							positions[i] = x * rescaleFactor;
+							positions[i + 2] = z * rescaleFactor;
+							break;
+						case "z":
+							// Rescale X and Y coordinates
+							positions[i] = x * rescaleFactor;
+							positions[i + 1] = y * rescaleFactor;
+							break;
+					}
+				}
+
+				positionAttribute.needsUpdate = true;
+			}
+
 			// Apply rotation
 			const angle = (element.rotation.angle * Math.PI) / 180;
 			// Note: Minecraft's rotation can be -45, -22.5, 0, 22.5, 45.
-			// Rescale is a more complex topic, not handled here often.
-			// const rescale = element.rotation.rescale || false;
 
 			switch (element.rotation.axis) {
 				case "x":
@@ -388,7 +540,7 @@ export class BlockMeshBuilder {
 			geometry.translate(pivotLocalX, pivotLocalY, pivotLocalZ);
 		}
 
-		// Finally, translate the (now possibly rotated) element face
+		// Finally, translate the (now possibly rotated and rescaled) element face
 		// by the element's center in block space to position it correctly within the block.
 		geometry.translate(
 			elementCenterInBlock[0],
