@@ -824,7 +824,6 @@ public async getMaterial(
         material.userData.isLiquid = true;
     }
 
-    console.log(`Material for ${texturePath}: transparent=true, alphaTest=${materialConfig.alphaTest}, opacity=${materialConfig.opacity}, depthWrite=${materialConfig.depthWrite}`);
 
     // Cache and return the material
     this.materialCache.set(cacheKey, material);

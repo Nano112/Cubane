@@ -569,7 +569,6 @@ export class BlockMeshBuilder {
 		return `${texturePath}_dir:${direction}_tint:${tintIndex}_cull:${cullFace}_block:${blockId}_props:${props}_biome:${biome}`;
 	}
 
-	// Replace your createFaceMaterial method in BlockMeshBuilder with this version
 	private async createFaceMaterial(
 		texturePath: string,
 		direction: string,
@@ -606,32 +605,55 @@ export class BlockMeshBuilder {
 				biome: biome,
 			};
 
-			// Get the base material from AssetLoader
-			const baseMaterial = await this.assetLoader.getMaterial(
+			const material = await this.assetLoader.getMaterial(
 				texturePath,
 				materialOptions
 			);
+			const clonedMaterial = material.clone();
 
-			// Instead of cloning, create a completely new material with the same properties
-			const newMaterial = new THREE.MeshStandardMaterial({
-				transparent: baseMaterial.transparent,
-				alphaTest: baseMaterial.alphaTest,
-				depthWrite: baseMaterial.depthWrite,
-				opacity: baseMaterial.opacity,
-				side: THREE.FrontSide, 
-			});
+			const isThinElementHeuristic =
+				elementSize &&
+				(elementSize[0] < 0.01 ||
+					elementSize[1] < 0.01 ||
+					elementSize[2] < 0.01);
+			const knownThinTexture =
+				texturePath.includes("pane") ||
+				texturePath.includes("fence") ||
+				texturePath.includes("rail") ||
+				texturePath.includes("ladder") ||
+				texturePath.includes("chain") ||
+				texturePath.includes("bars");
 
-			// Copy any special userData
-			newMaterial.userData = { ...baseMaterial.userData };
+			const isRedstoneTorchElement =
+				texturePath.includes("redstone_torch") || texturePath.includes("lit");
 
-			// Copy any defines
-			if (baseMaterial.defines) {
-				newMaterial.defines = { ...baseMaterial.defines };
+			if (
+				!isRedstoneTorchElement &&
+				(isThinElementHeuristic ||
+					knownThinTexture ||
+					(faceData.cullface === undefined && !isLiquid))
+			) {
+				clonedMaterial.side = THREE.DoubleSide;
+			} else {
+				clonedMaterial.side = THREE.FrontSide;
 			}
 
-			
+			clonedMaterial.transparent = material.transparent;
+			clonedMaterial.alphaTest = material.alphaTest;
+			clonedMaterial.depthWrite = material.depthWrite;
+			clonedMaterial.opacity = material.opacity;
 
-			return newMaterial;
+			clonedMaterial.userData = { ...material.userData };
+
+			console.log(
+				`Material for ${texturePath}: side=${
+					clonedMaterial.side === THREE.DoubleSide ? "DoubleSide" : "FrontSide"
+				}, alphaTest=${clonedMaterial.alphaTest}, opacity=${
+					clonedMaterial.opacity
+				}`
+			);
+
+			return clonedMaterial;
 		} catch (error) {
 			console.warn(`Failed to create material for ${texturePath}:`, error);
 			return new THREE.MeshStandardMaterial({
@@ -657,13 +679,12 @@ export class BlockMeshBuilder {
 			return new THREE.BufferGeometry();
 		}
 		if (validGeometries.length === 1) {
-			return validGeometries[0].clone(); // Clone to avoid modifying original if it's from a cache
+			return validGeometries[0].clone(); 
 		}
 
-		return this.manualMergeGeometries(validGeometries); // Fallback
+		return this.manualMergeGeometries(validGeometries); 
 	}
 
-	// Manual merge as a fallback or if BufferGeometryUtils is not set up.
 	private manualMergeGeometries(
 		geometries: THREE.BufferGeometry[]
 	): THREE.BufferGeometry {
