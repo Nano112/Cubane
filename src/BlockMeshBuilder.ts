@@ -26,43 +26,28 @@ export class BlockMeshBuilder {
 		this.assetLoader = assetLoader;
 	}
 
-	public async createBlockMesh(
+public async createBlockMesh(
 		model: BlockModel,
-		transform: {
-			x?: number;
-			y?: number;
-			uvlock?: boolean;
-			block?: Block;
-		} = {},
+		transform: { x?: number; y?: number; uvlock?: boolean; block?: Block } = {},
 		block?: Block,
 		biome: string = "plains"
 	): Promise<THREE.Object3D> {
 		const blockData = block || transform.block;
-
-		// Check if this block is waterlogged
 		if (blockData?.properties?.waterlogged === "true") {
 			return this.createWaterloggedBlockMesh(model, transform, block, biome);
 		}
-
-		// Otherwise, create normal block
 		return this.createBlockMeshNoWater(model, transform, block, biome);
 	}
 
 	public async createBlockMeshNoWater(
 		model: BlockModel,
-		transform: {
-			x?: number;
-			y?: number;
-			uvlock?: boolean;
-			block?: Block;
-		} = {},
+		transform: { x?: number; y?: number; uvlock?: boolean; block?: Block } = {},
 		block?: Block,
 		biome: string = "plains"
 	): Promise<THREE.Object3D> {
 		if (!model.elements || model.elements.length === 0) {
 			return this.createPlaceholderCube();
 		}
-		// console.log("Creating block mesh for model:", model); // Keep for debugging if needed
 		const blockData = block || transform.block;
 		const isLiquidBlockType = blockData && this.isLiquidBlock(blockData);
 		const isWaterBlockType = blockData && this.isWaterBlock(blockData);
@@ -74,91 +59,57 @@ export class BlockMeshBuilder {
 				const elementGeometries = await this.createElementGeometries(
 					element,
 					model,
+					transform, // Pass the whole transform object
 					blockData,
 					biome
 				);
 
-				for (const {
-					geometry,
-					material,
-					materialKey,
-					isLiquid,
-					isWater,
-					isLava,
-				} of elementGeometries) {
+				for (const { geometry, material, materialKey, isLiquid, isWater, isLava } of elementGeometries) {
 					if (!geometryGroups.has(materialKey)) {
 						geometryGroups.set(materialKey, {
-							geometry: new THREE.BufferGeometry(), // Start with an empty geometry
+							geometry: new THREE.BufferGeometry(),
 							material: material,
-							isLiquid,
-							isWater,
-							isLava,
+							isLiquid, isWater, isLava,
 						});
 					}
-
 					const group = geometryGroups.get(materialKey)!;
-					// Ensure group.geometry is valid before merging
-					if (
-						group.geometry.attributes.position &&
-						group.geometry.attributes.position.count > 0
-					) {
+					if (group.geometry.attributes.position && group.geometry.attributes.position.count > 0) {
 						group.geometry = this.mergeGeometries([group.geometry, geometry]);
 					} else {
-						group.geometry = geometry; // First geometry for this material
+						group.geometry = geometry;
 					}
 				}
 			} catch (error) {
-				console.error(
-					"Error creating element geometries for element:",
-					element,
-					error
-				);
+				console.error("Error creating element geometries for element:", element, error);
 			}
 		}
-
+        
+        // --- CRITICAL CHANGE ---
+        // The final group should NOT have the block-level rotation applied here.
+        // The caller (e.g., your code that uses Cubane) is responsible for applying the
+        // final rotation to this returned object.
 		const finalGroup = new THREE.Group();
 
-		for (const [
-			,
-			/* materialKey */ // Not directly used after grouping
-			{ geometry, material, isLiquid, isWater, isLava },
-		] of geometryGroups) {
-			if (
-				geometry.attributes.position &&
-				geometry.attributes.position.count > 0
-			) {
+		for (const [, { geometry, material, isLiquid, isWater, isLava }] of geometryGroups) {
+			if (geometry.attributes.position && geometry.attributes.position.count > 0) {
 				const mesh = new THREE.Mesh(geometry, material);
-
 				if (isLiquid) {
 					mesh.userData.isLiquid = true;
 					mesh.userData.isWater = isWater;
 					mesh.userData.isLava = isLava;
-					mesh.renderOrder = isWater ? 1 : 0; // Water renders after opaque
+					mesh.renderOrder = isWater ? 1 : 0;
 				}
-
 				finalGroup.add(mesh);
 			}
 		}
 
 		if (finalGroup.children.length === 0) {
-			// This case should ideally return a centered placeholder too if transforms are applied
-			const placeholder = this.createPlaceholderCube();
-			if (transform.y !== undefined) {
-				placeholder.rotateY((transform.y * Math.PI) / 180);
-			}
-			if (transform.x !== undefined) {
-				placeholder.rotateX((transform.x * Math.PI) / 180);
-			}
-			return placeholder;
+			return this.createPlaceholderCube();
 		}
 
-		// Add metadata
-		if (blockData) {
-			(finalGroup as any).blockData = blockData;
-		}
+		if (blockData) { (finalGroup as any).blockData = blockData; }
 		(finalGroup as any).biome = biome;
 		if (isLiquidBlockType) {
-			// Use the block-level liquid status
 			(finalGroup as any).isLiquid = true;
 			(finalGroup as any).isWater = isWaterBlockType;
 			(finalGroup as any).isLava = isLiquidBlockType && !isWaterBlockType;
@@ -264,6 +215,7 @@ export class BlockMeshBuilder {
 	private async createElementGeometries(
 		element: BlockModelElement,
 		model: BlockModel,
+		transform: { x?: number; y?: number; uvlock?: boolean },
 		blockData?: Block,
 		biome: string = "plains"
 	): Promise<
@@ -337,6 +289,7 @@ export class BlockMeshBuilder {
 						size, // element's size
 						faceData,
 						model,
+						transform,
 						blockData,
 						biome
 					);
@@ -362,6 +315,7 @@ export class BlockMeshBuilder {
 		elementSize: number[], // Renamed from 'size' to avoid confusion with local var 'size' if any
 		faceData: any,
 		model: BlockModel,
+		transform: { x?: number; y?: number; uvlock?: boolean },
 		blockData?: Block,
 		biome?: string
 	): Promise<{
@@ -414,7 +368,7 @@ export class BlockMeshBuilder {
 		// Translate face to its position relative to the element's center
 		geometry.translate(...facePositionOffset);
 
-		this.mapUVCoordinates(geometry, direction, faceData);
+		this.mapUVCoordinates(geometry, direction, faceData, transform);
 
 		let texturePath = this.assetLoader.resolveTexture(faceData.texture, model);
 		const isWater = this.isWaterBlock(blockData); // Check block type, not face
@@ -645,13 +599,7 @@ export class BlockMeshBuilder {
 
 			clonedMaterial.userData = { ...material.userData };
 
-			console.log(
-				`Material for ${texturePath}: side=${
-					clonedMaterial.side === THREE.DoubleSide ? "DoubleSide" : "FrontSide"
-				}, alphaTest=${clonedMaterial.alphaTest}, opacity=${
-					clonedMaterial.opacity
-				}`
-			);
+			
 
 			return clonedMaterial;
 		} catch (error) {
@@ -789,57 +737,69 @@ export class BlockMeshBuilder {
 		return `${blockData.namespace}:${blockData.name}` === "minecraft:lava";
 	}
 
-	private mapUVCoordinates(
+private mapUVCoordinates(
 		geometry: THREE.PlaneGeometry,
 		direction: string,
-		faceData: any
+		faceData: any,
+		transform: { x?: number; y?: number; uvlock?: boolean }
 	): void {
-		if (!faceData.uv) {
-			// Default UVs [0,0,16,16] effectively
-			faceData.uv = [0, 0, 16, 16];
-		}
+		if (!faceData.uv) { faceData.uv = [0, 0, 16, 16]; }
 		const uvAttribute = geometry.attributes.uv as THREE.BufferAttribute;
-		// Minecraft UVs are pixel coordinates on a 16x16 texture atlas sheet (typically)
-		// Or, if texture is larger, UVs are still 0-16 range on that texture.
 		const [uMinPx, vMinPx, uMaxPx, vMaxPx] = faceData.uv;
-
-		// Normalize UVs to 0-1 range based on a 16-unit texture dimension
-		// This assumes textures are resolved to individual image files or a well-managed atlas
-		// where these 0-16 coords map to a 0-1 range on THAT specific texture.
-		// If AssetLoader returns textures from a larger atlas, UV remapping might be needed there.
-		// For now, assume 1/16 normalization is correct for individual textures.
 		const u1 = uMinPx / 16;
 		const v1 = vMinPx / 16;
 		const u2 = uMaxPx / 16;
 		const v2 = vMaxPx / 16;
-
-		// PlaneGeometry UVs: (0,1) TL, (1,1) TR, (0,0) BL, (1,0) BR
-		// Desired mapping from texture (origin top-left):
-		// TL vertex -> (u1, v1) tex
-		// TR vertex -> (u2, v1) tex
-		// BL vertex -> (u1, v2) tex
-		// BR vertex -> (u2, v2) tex
-		// THREE.js UV y-coord is often inverted (0 at bottom), so use 1-v for texture v.
 		const uvCoords = new Float32Array([
-			u1,
-			1 - v1, // TL
-			u2,
-			1 - v1, // TR
-			u1,
-			1 - v2, // BL
-			u2,
-			1 - v2, // BR
+			u1, 1 - v1, u2, 1 - v1, u1, 1 - v2, u2, 1 - v2,
 		]);
 
-		// UV Rotation (optional, from model spec)
-		// The FACING_UV_ROT seems to be a custom addition; vanilla MC handles this via model variants or baked rotations.
-		// If uvlock is true, face rotation doesn't affect UVs. If false, it does. This is complex.
-		// For now, only consider explicit `faceData.rotation`.
-		const rotDeg = faceData.rotation || 0; // Explicit UV rotation in degrees (0, 90, 180, 270)
+		// Base rotation from the model file itself
+		let totalRotation = faceData.rotation || 0;
 
-		if (rotDeg !== 0) {
-			this.applyUVRotation(uvCoords, rotDeg);
+		// If uvlock is not enabled (or not specified), apply block's rotation to the UVs.
+		// This is what makes textures on stairs, logs, etc., orient with the world.
+		if (transform.uvlock !== true) {
+			const yRot = transform.y || 0;
+			const xRot = transform.x || 0;
+
+			// This is a complex mapping of 3D rotations to 2D UV rotations.
+			// The key is to add or subtract the world rotation based on the face's normal.
+			switch (direction) {
+				case "up":
+					totalRotation += yRot;
+					break;
+				case "down":
+					totalRotation -= yRot;
+					break;
+				case "north":
+					totalRotation += yRot;
+					break;
+				case "south":
+					// South face is opposite of North, so its UVs rotate oppositely.
+					totalRotation -= yRot;
+					break;
+				case "east":
+					totalRotation += yRot;
+					break;
+				case "west":
+					// West is opposite of East.
+					totalRotation -= yRot;
+					break;
+			}
+            // A full implementation would also handle x-axis rotation for blocks like levers on walls.
+            // For now, this y-axis logic covers the vast majority of blocks.
 		}
+
+		// Normalize rotation to a positive value between 0 and 359
+		totalRotation = (totalRotation % 360 + 360) % 360;
+
+		if (totalRotation !== 0) {
+			// Minecraft UV rotations are always in 90-degree increments.
+			const roundedRotation = Math.round(totalRotation / 90) * 90;
+			this.applyUVRotation(uvCoords, roundedRotation);
+		}
+
 		uvAttribute.array.set(uvCoords);
 		uvAttribute.needsUpdate = true;
 	}
