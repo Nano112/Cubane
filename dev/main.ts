@@ -148,33 +148,6 @@ function updateBlockList() {
 
 const HIGHLIGHT_COLOR = new THREE.Color(0xffaa00);
 
-function applyHighlight(object: THREE.Object3D, highlight: boolean) {
-	object.traverse((child) => {
-		if (child instanceof THREE.Mesh && child.material) {
-			const materials = Array.isArray(child.material)
-				? child.material
-				: [child.material];
-			materials.forEach((mat) => {
-				if (mat instanceof THREE.MeshStandardMaterial) {
-					if (highlight) {
-						if (child.userData.originalEmissive === undefined) {
-							child.userData.originalEmissive = mat.emissive.clone();
-						}
-						mat.emissive.copy(HIGHLIGHT_COLOR);
-					} else {
-						if (child.userData.originalEmissive instanceof THREE.Color) {
-							mat.emissive.copy(child.userData.originalEmissive);
-							delete child.userData.originalEmissive;
-						} else {
-							mat.emissive.setHex(0x000000);
-						}
-					}
-				}
-			});
-		}
-	});
-}
-
 function selectBlock(id: string | null) {
 	if (selectedBlockId === id) return;
 
@@ -190,49 +163,6 @@ function selectBlock(id: string | null) {
 		if (newBlock) applyHighlight(newBlock.mesh, true);
 	}
 	updateBlockList();
-}
-
-async function addBlock(blockString: string, position: THREE.Vector3) {
-	if (!blockString) {
-		updateStatus("Error: Block string cannot be empty.");
-		return null;
-	}
-	try {
-		const mesh = await cubane.getBlockMesh(blockString);
-		if (!mesh) {
-			updateStatus(`Error: Cubane returned no mesh for "${blockString}"`);
-			return null;
-		}
-		mesh.position.copy(position);
-
-		const id = `block_${Date.now()}_${Math.random()
-			.toString(36)
-			.substring(2, 7)}`;
-		mesh.userData.blockId = id;
-		mesh.traverse((child) => {
-			child.userData.blockId = id;
-		});
-
-		const blockData: BlockData = {
-			id,
-			blockString,
-			position: position.clone(),
-			mesh,
-		};
-		blocks.push(blockData);
-		scene.add(mesh);
-
-		updateStatus(
-			`Added ${blockString} at ${position.x}, ${position.y}, ${position.z}`
-		);
-		updateBlockList();
-		selectBlock(id);
-		return id;
-	} catch (error) {
-		updateStatus(`Error adding block "${blockString}": ${error}`);
-		console.error(`Full error adding block "${blockString}":`, error);
-		return null;
-	}
 }
 
 function removeBlock(id: string) {
@@ -360,6 +290,40 @@ async function loadResourcePackFromFile(file: File) {
 	}
 }
 
+// Add this helper function with better debugging
+function cloneMeshMaterials(mesh) {
+	mesh.traverse((child) => {
+		if (child instanceof THREE.Mesh && child.material) {
+			if (Array.isArray(child.material)) {
+				child.material = child.material.map((mat) => {
+					const cloned = mat.clone();
+					// Copy all transparency-related properties explicitly
+					cloned.transparent = mat.transparent;
+					cloned.alphaTest = mat.alphaTest;
+					cloned.depthWrite = mat.depthWrite;
+					cloned.opacity = mat.opacity;
+					cloned.side = mat.side;
+					// Copy userData
+					cloned.userData = { ...mat.userData };
+					return cloned;
+				});
+			} else {
+				const cloned = child.material.clone();
+				// Copy all transparency-related properties explicitly
+				cloned.transparent = child.material.transparent;
+				cloned.alphaTest = child.material.alphaTest;
+				cloned.depthWrite = child.material.depthWrite;
+				cloned.opacity = child.material.opacity;
+				cloned.side = child.material.side;
+				// Copy userData
+				cloned.userData = { ...child.material.userData };
+				child.material = cloned;
+			}
+		}
+	});
+	return mesh;
+}
+
 async function updatePreviewMesh() {
 	if (previewMesh) {
 		scene.remove(previewMesh);
@@ -377,20 +341,31 @@ async function updatePreviewMesh() {
 			const tempPreviewMesh = await cubane.getBlockMesh(blockString);
 			if (!tempPreviewMesh) return;
 
-			previewMesh = tempPreviewMesh;
+			// Clone the mesh and its materials to avoid affecting other blocks
+			previewMesh = tempPreviewMesh.clone();
+			cloneMeshMaterials(previewMesh);
+
+			// Apply simple preview effects - just transparency and glow
 			previewMesh.traverse((child) => {
 				if (child instanceof THREE.Mesh) {
 					const materials = Array.isArray(child.material)
 						? child.material
 						: [child.material];
 					materials.forEach((mat) => {
-						mat.transparent = true;
-						mat.opacity = 0.6;
-						if (mat instanceof THREE.MeshStandardMaterial)
-							mat.emissive.setHex(0x111111);
+						// Store original properties for restoration
+						mat.userData.isPreviewMaterial = true;
+						mat.userData.originalOpacity = mat.opacity;
+
+						// Apply preview effects
+						mat.opacity = 0.6; // Semi-transparent preview
+						if (mat instanceof THREE.MeshStandardMaterial) {
+							mat.userData.originalEmissive = mat.emissive.clone();
+							mat.emissive.setHex(0x111111); // Slight glow
+						}
 					});
 				}
 			});
+
 			scene.add(previewMesh);
 			previewMesh.visible = false;
 		} catch (error) {
@@ -400,6 +375,173 @@ async function updatePreviewMesh() {
 			);
 		}
 	}
+}
+
+async function addBlock(blockString: string, position: THREE.Vector3) {
+	if (!blockString) {
+		updateStatus("Error: Block string cannot be empty.");
+		return null;
+	}
+	try {
+		const originalMesh = await cubane.getBlockMesh(blockString);
+		if (!originalMesh) {
+			updateStatus(`Error: Cubane returned no mesh for "${blockString}"`);
+			return null;
+		}
+
+		console.log(`=== Adding block: ${blockString} ===`);
+
+		// Debug: Log original material properties
+		originalMesh.traverse((child) => {
+			if (child instanceof THREE.Mesh && child.material) {
+				const materials = Array.isArray(child.material)
+					? child.material
+					: [child.material];
+				materials.forEach((mat, i) => {
+					console.log(`Original material ${i}:`, {
+						transparent: mat.transparent,
+						alphaTest: mat.alphaTest,
+						opacity: mat.opacity,
+						depthWrite: mat.depthWrite,
+						side: mat.side === THREE.DoubleSide ? "DoubleSide" : "FrontSide",
+					});
+				});
+			}
+		});
+
+		// Clone the mesh and materials to ensure independence from preview and other blocks
+		const mesh = originalMesh.clone();
+		cloneMeshMaterials(mesh);
+
+		console.log(`After cloning:`);
+
+		// Debug: Log cloned material properties
+		mesh.traverse((child) => {
+			if (child instanceof THREE.Mesh && child.material) {
+				const materials = Array.isArray(child.material)
+					? child.material
+					: [child.material];
+				materials.forEach((mat, i) => {
+					console.log(`Cloned material ${i}:`, {
+						transparent: mat.transparent,
+						alphaTest: mat.alphaTest,
+						opacity: mat.opacity,
+						depthWrite: mat.depthWrite,
+						side: mat.side === THREE.DoubleSide ? "DoubleSide" : "FrontSide",
+						isPreviewMaterial: mat.userData.isPreviewMaterial,
+					});
+				});
+			}
+		});
+
+		// Only restore preview-specific properties, keep PNG transparency intact
+		mesh.traverse((child) => {
+			if (child instanceof THREE.Mesh && child.material) {
+				const materials = Array.isArray(child.material)
+					? child.material
+					: [child.material];
+				materials.forEach((mat) => {
+					if (mat instanceof THREE.MeshStandardMaterial) {
+						// Only reset emissive glow (preview effect)
+						mat.emissive.setHex(0x000000);
+
+						// Restore original opacity if this was a preview material
+						if (mat.userData.isPreviewMaterial) {
+							console.log(
+								`Restoring preview material, originalOpacity: ${mat.userData.originalOpacity}`
+							);
+							mat.opacity = mat.userData.originalOpacity || 1.0;
+							// Clean up preview flags
+							delete mat.userData.isPreviewMaterial;
+							delete mat.userData.originalOpacity;
+							delete mat.userData.originalEmissive;
+						}
+
+						// Force material update
+						mat.needsUpdate = true;
+					}
+				});
+			}
+		});
+
+		console.log(`After restoration:`);
+
+		// Debug: Log final material properties
+		mesh.traverse((child) => {
+			if (child instanceof THREE.Mesh && child.material) {
+				const materials = Array.isArray(child.material)
+					? child.material
+					: [child.material];
+				materials.forEach((mat, i) => {
+					console.log(`Final material ${i}:`, {
+						transparent: mat.transparent,
+						alphaTest: mat.alphaTest,
+						opacity: mat.opacity,
+						depthWrite: mat.depthWrite,
+						side: mat.side === THREE.DoubleSide ? "DoubleSide" : "FrontSide",
+					});
+				});
+			}
+		});
+
+		mesh.position.copy(position);
+
+		const id = `block_${Date.now()}_${Math.random()
+			.toString(36)
+			.substring(2, 7)}`;
+		mesh.userData.blockId = id;
+		mesh.traverse((child) => {
+			child.userData.blockId = id;
+		});
+
+		const blockData: BlockData = {
+			id,
+			blockString,
+			position: position.clone(),
+			mesh,
+		};
+		blocks.push(blockData);
+		scene.add(mesh);
+
+		updateStatus(
+			`Added ${blockString} at ${position.x}, ${position.y}, ${position.z}`
+		);
+		updateBlockList();
+		selectBlock(id);
+		return id;
+	} catch (error) {
+		updateStatus(`Error adding block "${blockString}": ${error}`);
+		console.error(`Full error adding block "${blockString}":`, error);
+		return null;
+	}
+}
+function applyHighlight(object: THREE.Object3D, highlight: boolean) {
+	object.traverse((child) => {
+		if (child instanceof THREE.Mesh && child.material) {
+			const materials = Array.isArray(child.material)
+				? child.material
+				: [child.material];
+			materials.forEach((mat) => {
+				if (mat instanceof THREE.MeshStandardMaterial) {
+					if (highlight) {
+						// Store the original emissive color if not already stored
+						if (child.userData.originalEmissive === undefined) {
+							child.userData.originalEmissive = mat.emissive.clone();
+						}
+						mat.emissive.copy(HIGHLIGHT_COLOR);
+					} else {
+						// Restore the original emissive color
+						if (child.userData.originalEmissive instanceof THREE.Color) {
+							mat.emissive.copy(child.userData.originalEmissive);
+							delete child.userData.originalEmissive;
+						} else {
+							mat.emissive.setHex(0x000000);
+						}
+					}
+				}
+			});
+		}
+	});
 }
 
 function updateMousePointer(event: MouseEvent) {

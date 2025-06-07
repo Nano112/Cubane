@@ -527,155 +527,310 @@ export class AssetLoader {
 		return this.tintManager.getTint(blockId, properties, biome, position);
 	}
 
+	// Add these methods to your AssetLoader class
+
 	/**
-	 * Create a material for a texture with optional tinting and liquid properties
+	 * Analyze PNG texture transparency by examining alpha channel data
 	 */
-	public async getMaterial(
-		texturePath: string,
-		options: {
-			transparent?: boolean;
-			tint?: THREE.Color;
-			isLiquid?: boolean;
-			isWater?: boolean;
-			isLava?: boolean;
-			faceDirection?: string;
-			forceAnimation?: boolean;
-		} = {}
-	): Promise<THREE.Material> {
-		// Create cache key including all options
-		const tintKey = options.tint
-			? `:tint:${options.tint.r.toFixed(3)},${options.tint.g.toFixed(
-					3
-			  )},${options.tint.b.toFixed(3)}`
-			: "";
+	public analyzeTextureTransparency(texture: THREE.Texture): {
+		hasTransparency: boolean;
+		transparencyType: "opaque" | "cutout" | "blend";
+		averageAlpha: number;
+		visibleAlpha: number; // Average alpha of only visible pixels
+		opaquePixelCount: number;
+		transparentPixelCount: number;
+		semiTransparentPixelCount: number;
+	} {
+		const canvas = document.createElement("canvas");
+		const ctx = canvas.getContext("2d");
 
-		const liquidKey = options.isLiquid
-			? `:liquid:${options.isWater ? "water" : "lava"}:${
-					options.faceDirection || ""
-			  }`
-			: "";
-
-		const cacheKey = `material:${texturePath}:${
-			options.transparent ? "transparent" : "opaque"
-		}${tintKey}${liquidKey}`;
-
-		// Check cache first
-		if (this.materialCache.has(cacheKey)) {
-			return this.materialCache.get(cacheKey)!;
-		}
-
-		// Handle special paths for liquids
-		let finalTexturePath = texturePath;
-		if (options.isWater) {
-			// Make sure we're using the correct water texture based on face direction
-			if (options.faceDirection === "up" || options.faceDirection === "down") {
-				// For top/bottom faces, use still water
-				finalTexturePath = "block/water_still";
-			} else {
-				// For side faces, use flowing water
-				finalTexturePath = "block/water_flow";
-			}
-		} else if (options.isLava) {
-			// Make sure we're using the correct lava texture based on face direction
-			if (options.faceDirection === "up" || options.faceDirection === "down") {
-				// For top/bottom faces, use still lava
-				finalTexturePath = "block/lava_still";
-			} else {
-				// For side faces, use flowing lava
-				finalTexturePath = "block/lava_flow";
-			}
-		}
-
-		// Try to load as animated texture for liquids or if animation is forced
-		let texture: THREE.Texture;
-
-		// Check if this path should be animated
-		const shouldCheckAnimation =
-			options.isLiquid ||
-			options.forceAnimation ||
-			finalTexturePath.includes("water") ||
-			finalTexturePath.includes("lava");
-
-		if (shouldCheckAnimation) {
-			const isAnimated = await this.animatedTextureManager.isAnimated(
-				`textures/${finalTexturePath}`
-			);
-
-			if (isAnimated) {
-				const animatedTexture =
-					await this.animatedTextureManager.createAnimatedTexture(
-						finalTexturePath
-					);
-
-				if (animatedTexture) {
-					texture = animatedTexture;
-				} else {
-					// Fallback to regular texture
-					texture = await this.getTexture(finalTexturePath);
-				}
-			} else {
-				// Not animated
-				texture = await this.getTexture(finalTexturePath);
-			}
-		} else {
-			// Regular texture
-			texture = await this.getTexture(finalTexturePath);
-		}
-
-		// Create the material with appropriate settings
-		const material = new THREE.MeshStandardMaterial({
-			map: texture,
-			transparent: true,
-			opacity: options.isWater ? 0.8 : 1.0,
-			alphaTest: 0.5,
-
-			side: THREE.FrontSide, // Use double-sided for liquids and transparent materials
-		});
-
-		// Apply tint if provided
-		if (options.tint) {
-			material.color = options.tint;
-			// Enable color multiplication with texture
-			material.defines = material.defines || {};
-			material.defines.USE_COLOR = "";
-		}
-
-		// Apply special properties for water
-		if (options.isWater) {
-			// Store water data for special rendering
-			material.userData.isWater = true;
-			material.userData.faceDirection = options.faceDirection;
-			material.userData.renderToWaterPass = true;
-		}
-
-		// Apply special properties for lava
-		if (options.isLava) {
-			material.emissive = new THREE.Color(0xff2200);
-			material.emissiveIntensity = 0.5;
-			material.roughness = 0.7;
-
-			// Store lava data for special rendering
-			material.userData.isLava = true;
-			material.userData.faceDirection = options.faceDirection;
-			material.userData.renderToLavaPass = true;
-
-			// Add pulsing effect parameters
-			material.userData.lavaAnimationParams = {
-				pulseSpeed: 0.4,
-				pulseMin: 0.4,
-				pulseMax: 0.6,
+		if (!ctx || !texture.image) {
+			return {
+				hasTransparency: false,
+				transparencyType: "opaque",
+				averageAlpha: 1.0,
+				visibleAlpha: 1.0,
+				opaquePixelCount: 0,
+				transparentPixelCount: 0,
+				semiTransparentPixelCount: 0,
 			};
 		}
 
-		// Store liquidness in userData for potential rendering optimizations
-		if (options.isLiquid) {
-			material.userData.isLiquid = true;
-		}
+		canvas.width = texture.image.width;
+		canvas.height = texture.image.height;
+		ctx.drawImage(texture.image, 0, 0);
 
-		// Cache and return the material
-		this.materialCache.set(cacheKey, material);
-		return material;
+		try {
+			const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+			const data = imageData.data;
+
+			let totalAlpha = 0;
+			let visibleAlphaSum = 0;
+			let transparentPixels = 0;
+			let opaquePixels = 0;
+			let semiTransparentPixels = 0;
+			let visiblePixels = 0;
+			let totalPixels = 0;
+
+			// Analyze alpha values with better thresholds
+			for (let i = 3; i < data.length; i += 4) {
+				// Every 4th value is alpha
+				const alpha = data[i] / 255;
+				totalAlpha += alpha;
+				totalPixels++;
+
+				if (alpha < 0.01) {
+					// Nearly fully transparent
+					transparentPixels++;
+				} else if (alpha > 0.99) {
+					// Nearly fully opaque
+					opaquePixels++;
+					visibleAlphaSum += alpha;
+					visiblePixels++;
+				} else {
+					// Semi-transparent
+					semiTransparentPixels++;
+					visibleAlphaSum += alpha;
+					visiblePixels++;
+				}
+			}
+
+			const averageAlpha = totalAlpha / totalPixels;
+			const visibleAlpha =
+				visiblePixels > 0 ? visibleAlphaSum / visiblePixels : 1.0;
+			const hasTransparency =
+				transparentPixels > 0 || semiTransparentPixels > 0;
+
+			if (!hasTransparency) {
+				console.log(`Opaque texture detected`);
+				return {
+					hasTransparency: false,
+					transparencyType: "opaque",
+					averageAlpha: 1.0,
+					visibleAlpha: 1.0,
+					opaquePixelCount: opaquePixels,
+					transparentPixelCount: transparentPixels,
+					semiTransparentPixelCount: semiTransparentPixels,
+				};
+			}
+
+			// Better logic for determining transparency type
+			const semiTransparentRatio = semiTransparentPixels / totalPixels;
+			const transparentRatio = transparentPixels / totalPixels;
+
+			let transparencyType: "cutout" | "blend";
+
+			// If most pixels are either fully transparent or fully opaque, it's cutout
+			if (
+				semiTransparentRatio < 0.1 &&
+				(transparentRatio > 0.1 || opaquePixels > totalPixels * 0.5)
+			) {
+				transparencyType = "cutout";
+			} else {
+				transparencyType = "blend";
+			}
+
+			console.log(`Texture transparency analysis: ${transparencyType}`);
+			console.log(`  - Total pixels: ${totalPixels}`);
+			console.log(
+				`  - Transparent: ${transparentPixels} (${(
+					transparentRatio * 100
+				).toFixed(1)}%)`
+			);
+			console.log(
+				`  - Semi-transparent: ${semiTransparentPixels} (${(
+					semiTransparentRatio * 100
+				).toFixed(1)}%)`
+			);
+			console.log(
+				`  - Opaque: ${opaquePixels} (${(
+					(opaquePixels / totalPixels) *
+					100
+				).toFixed(1)}%)`
+			);
+			console.log(`  - Average alpha: ${averageAlpha.toFixed(3)}`);
+			console.log(`  - Visible alpha: ${visibleAlpha.toFixed(3)}`);
+
+			return {
+				hasTransparency: true,
+				transparencyType,
+				averageAlpha,
+				visibleAlpha,
+				opaquePixelCount: opaquePixels,
+				transparentPixelCount: transparentPixels,
+				semiTransparentPixelCount: semiTransparentPixels,
+			};
+		} catch (error) {
+			console.warn("Could not analyze texture transparency:", error);
+			return {
+				hasTransparency: false,
+				transparencyType: "opaque",
+				averageAlpha: 1.0,
+				visibleAlpha: 1.0,
+				opaquePixelCount: 0,
+				transparentPixelCount: 0,
+				semiTransparentPixelCount: 0,
+			};
+		}
 	}
+
+
+	// Replace the getMaterial method in AssetLoader with this simplified version
+public async getMaterial(
+    texturePath: string,
+    options: {
+        transparent?: boolean;
+        tint?: THREE.Color;
+        isLiquid?: boolean;
+        isWater?: boolean;
+        isLava?: boolean;
+        faceDirection?: string;
+        forceAnimation?: boolean;
+        alphaTest?: number;
+        opacity?: number;
+        biome?: string;
+    } = {}
+): Promise<THREE.Material> {
+    // Create cache key including all options
+    const tintKey = options.tint
+        ? `:tint:${options.tint.r.toFixed(3)},${options.tint.g.toFixed(3)},${options.tint.b.toFixed(3)}`
+        : "";
+
+    const liquidKey = options.isLiquid
+        ? `:liquid:${options.isWater ? "water" : "lava"}:${options.faceDirection || ""}`
+        : "";
+
+    const cacheKey = `material:${texturePath}:${
+        options.transparent ? "transparent" : "opaque"
+    }${tintKey}${liquidKey}`;
+
+    // Check cache first
+    if (this.materialCache.has(cacheKey)) {
+        return this.materialCache.get(cacheKey)!;
+    }
+
+    // Handle special paths for liquids
+    let finalTexturePath = texturePath;
+    if (options.isWater) {
+        if (options.faceDirection === "up" || options.faceDirection === "down") {
+            finalTexturePath = "block/water_still";
+        } else {
+            finalTexturePath = "block/water_flow";
+        }
+    } else if (options.isLava) {
+        if (options.faceDirection === "up" || options.faceDirection === "down") {
+            finalTexturePath = "block/lava_still";
+        } else {
+            finalTexturePath = "block/lava_flow";
+        }
+    }
+
+    // Load texture (animated or static)
+    let texture: THREE.Texture;
+    const shouldCheckAnimation =
+        options.isLiquid ||
+        options.forceAnimation ||
+        finalTexturePath.includes("water") ||
+        finalTexturePath.includes("lava");
+
+    if (shouldCheckAnimation) {
+        const isAnimated = await this.animatedTextureManager.isAnimated(
+            `textures/${finalTexturePath}`
+        );
+
+        if (isAnimated) {
+            const animatedTexture = await this.animatedTextureManager.createAnimatedTexture(
+                finalTexturePath
+            );
+            texture = animatedTexture || (await this.getTexture(finalTexturePath));
+        } else {
+            texture = await this.getTexture(finalTexturePath);
+        }
+    } else {
+        texture = await this.getTexture(finalTexturePath);
+    }
+
+    // Simple approach: Let PNG alpha channels handle transparency naturally
+    const materialConfig: any = {
+        map: texture,
+        transparent: true,  // Always true - let PNG alpha do the work
+        alphaTest: 0.01,    // Very low threshold to discard nearly transparent pixels
+        depthWrite: true,   // Default to true, override for special cases
+        opacity: 1.0,       // Default to full opacity, let PNG alpha handle it
+        side: THREE.FrontSide
+    };
+
+    // Special handling for specific material types
+    if (options.isWater) {
+        materialConfig.alphaTest = 0.0;      // Water uses blending, not cutout
+        materialConfig.depthWrite = false;   // Water needs proper blending
+        materialConfig.opacity = options.opacity || 0.8;
+    } else if (options.isLava) {
+        materialConfig.alphaTest = 0.0;      // Lava is usually opaque but might have edges
+        materialConfig.depthWrite = true;
+        materialConfig.opacity = 1.0;
+    } else if (finalTexturePath.includes('glass')) {
+        // Glass materials need blending, not cutout
+        materialConfig.alphaTest = 0.0;
+        materialConfig.depthWrite = false;
+        materialConfig.opacity = options.opacity || 0.85; // Slightly transparent for realistic glass
+    } else {
+        // For everything else, use a low alphaTest to handle cutout transparency
+        // This includes leaves, grass, redstone dust, torches, etc.
+        materialConfig.alphaTest = options.alphaTest || 0.01;
+        materialConfig.depthWrite = true;
+        materialConfig.opacity = options.opacity || 1.0;
+    }
+
+    const material = new THREE.MeshStandardMaterial(materialConfig);
+
+    // Apply tint if provided
+    if (options.tint) {
+        material.color = options.tint;
+        material.defines = material.defines || {};
+        material.defines.USE_COLOR = "";
+    }
+
+    // Apply special properties for water
+    if (options.isWater) {
+        material.userData.isWater = true;
+        material.userData.faceDirection = options.faceDirection;
+        material.userData.renderToWaterPass = true;
+
+        // Add water-specific material properties
+        material.roughness = options.faceDirection === "up" ? 0.1 : 0.3;
+        material.metalness = options.faceDirection === "up" ? 0.05 : 0.0;
+    }
+
+    // Apply special properties for lava
+    if (options.isLava) {
+        material.emissive = new THREE.Color(0xff2200);
+        material.emissiveIntensity = 0.5;
+        material.roughness = 0.7;
+        material.metalness = 0.0;
+
+        material.userData.isLava = true;
+        material.userData.faceDirection = options.faceDirection;
+        material.userData.renderToLavaPass = true;
+        material.userData.lavaAnimationParams = {
+            pulseSpeed: 0.4,
+            pulseMin: 0.4,
+            pulseMax: 0.6,
+        };
+    }
+
+    // Store general liquid status
+    if (options.isLiquid) {
+        material.userData.isLiquid = true;
+    }
+
+    console.log(`Material for ${texturePath}: transparent=true, alphaTest=${materialConfig.alphaTest}, opacity=${materialConfig.opacity}, depthWrite=${materialConfig.depthWrite}`);
+
+    // Cache and return the material
+    this.materialCache.set(cacheKey, material);
+    
+    return material;
+}
 
 	// Add to your AssetLoader class
 	public async getEntityTexture(entityName: string): Promise<THREE.Texture> {

@@ -569,6 +569,7 @@ export class BlockMeshBuilder {
 		return `${texturePath}_dir:${direction}_tint:${tintIndex}_cull:${cullFace}_block:${blockId}_props:${props}_biome:${biome}`;
 	}
 
+	// Replace your createFaceMaterial method in BlockMeshBuilder with this version
 	private async createFaceMaterial(
 		texturePath: string,
 		direction: string,
@@ -582,64 +583,20 @@ export class BlockMeshBuilder {
 		isLava?: boolean
 	): Promise<THREE.Material> {
 		try {
-			// --- START NEW TRANSPARENCY LOGIC ---
-			const knownCutoutTexturePatterns = [
-				"grass", // Matches "grass", "tall_grass"
-				"redstone_dust",
-				"redstone_torch", // The transparent parts around the torch head
-				"torch", // For regular torch flames/transparent bits
-				"flower",
-				"campfire", // Campfire flames
-				"tripwire", // Tripwire hook and string
-				"cake", // Cake top texture
-				"cactus",
-				"sapling",
-				"fern",
-				"leaves", // Already in your old list
-				"glass", // Already in your old list, glass is cutout
-				"vine",
-				"lily_pad",
-				"web",
-				"iron_bars",
-				"chain",
-				"pane", // For glass_pane
-				"door", // For doors with windows like iron_door, spruce_door etc.
-				"trapdoor", // For trapdoors with holes
-				// Add any other relevant patterns for cutout textures
-			];
-
-			const knownBlendedTransparentTexturePatterns = [
-				"water", // Handled by isWater
-				"ice", // Regular ice is somewhat transparent, stained_ice too
-				"slime",
-				// Stained glass is a prime example of blended transparency
-				"stained_glass", // if you have specific textures for stained glass
-			];
-
-			const isCutoutTexture = knownCutoutTexturePatterns.some((pattern) =>
-				texturePath.includes(pattern)
-			);
-			const isBlendedTexture =
-				(knownBlendedTransparentTexturePatterns.some((pattern) =>
-					texturePath.includes(pattern)
-				) ||
-					(texturePath.includes("glass") && texturePath.includes("stained"))) && // More specific for stained glass
-				!isWater; // Water has its own more specific handling
-
-			// --- END NEW TRANSPARENCY LOGIC ---
-
 			let tint: THREE.Color | undefined = undefined;
 			if (blockData && faceData.tintindex !== undefined) {
-				const blockId = `${blockData.namespace}:${blockData.name}`;
-				tint = this.assetLoader.getTint(blockId, blockData.properties, biome);
+				const blockIdForTint = `${blockData.namespace}:${blockData.name}`;
+				tint = this.assetLoader.getTint(
+					blockIdForTint,
+					blockData.properties,
+					biome
+				);
 			}
 			if (isWater && !tint) {
 				tint = this.assetLoader.getTint("minecraft:water", {}, "default");
 			}
 
 			const materialOptions: any = {
-				// Pass hints to AssetLoader, though we'll override specific props on the clone
-				alphaTest: isCutoutTexture ? 0.1 : 0.0, // Default alphaTest for cutouts
 				tint: tint,
 				isLiquid: isLiquid,
 				isWater: isWater,
@@ -649,96 +606,32 @@ export class BlockMeshBuilder {
 				biome: biome,
 			};
 
-			const material = await this.assetLoader.getMaterial(
+			// Get the base material from AssetLoader
+			const baseMaterial = await this.assetLoader.getMaterial(
 				texturePath,
 				materialOptions
 			);
-			const clonedMaterial = material.clone();
 
-			// --- APPLY MATERIAL PROPERTIES BASED ON TYPE ---
+			// Instead of cloning, create a completely new material with the same properties
+			const newMaterial = new THREE.MeshStandardMaterial({
+				transparent: baseMaterial.transparent,
+				alphaTest: baseMaterial.alphaTest,
+				depthWrite: baseMaterial.depthWrite,
+				opacity: baseMaterial.opacity,
+				side: THREE.FrontSide, 
+			});
 
-			// Default side based on cullface or thinness (from previous logic)
-			const isThinElementHeuristic =
-				elementSize &&
-				(elementSize[0] < 0.01 ||
-					elementSize[1] < 0.01 ||
-					elementSize[2] < 0.01);
-			const knownGeneralThinTexture = // Broader definition for thin elements that might not be cutout
-				texturePath.includes("pane") ||
-				texturePath.includes("fence") ||
-				texturePath.includes("rail") ||
-				// texturePath.includes("door") || // Covered by cutout logic often
-				// texturePath.includes("trapdoor") || // Covered by cutout logic often
-				texturePath.includes("ladder");
+			// Copy any special userData
+			newMaterial.userData = { ...baseMaterial.userData };
 
-			if (
-				isThinElementHeuristic ||
-				knownGeneralThinTexture ||
-				(faceData.cullface === undefined && !isLiquid)
-			) {
-				// If no cullface is defined (e.g. for flat planes like grass), it usually means it should be double-sided.
-				// Liquids are an exception, usually single-sided faces.
-				clonedMaterial.side = THREE.DoubleSide;
-			} else {
-				clonedMaterial.side = THREE.FrontSide;
+			// Copy any defines
+			if (baseMaterial.defines) {
+				newMaterial.defines = { ...baseMaterial.defines };
 			}
 
-			if (isCutoutTexture) {
-				clonedMaterial.transparent = true; // Essential for alpha processing
-				clonedMaterial.alphaTest =
-					materialOptions.alphaTest > 0 ? materialOptions.alphaTest : 0.1; // Ensure alphaTest is set (0.1 is common for MC)
-				clonedMaterial.depthWrite = true; // Cutout materials write to depth buffer
-				clonedMaterial.side = THREE.DoubleSide; // Most cutout textures are flat planes
-			} else if (isBlendedTexture || isWater) {
-				clonedMaterial.transparent = true;
-				clonedMaterial.depthWrite = false; // Common for blended transparency to avoid sorting artifacts with depth buffer
-				clonedMaterial.alphaTest = 0.0; // Blended transparency should not use alphaTest
-				// clonedMaterial.side can remain as set by general logic, or be THREE.FrontSide
-				// For example, stained glass blocks are still cubes, so FrontSide with culling is fine.
-				// If it's a flat plane of stained glass, DoubleSide might be needed.
-			} else {
-				// Opaque material
-				clonedMaterial.transparent = false;
-				clonedMaterial.alphaTest = 0.0;
-				clonedMaterial.depthWrite = true;
-			}
+			
 
-			// Specific overrides for Water
-			if (isWater) {
-				clonedMaterial.transparent = true; // Ensure water is transparent
-				clonedMaterial.alphaTest = 0.0; // Water uses alpha blending
-				clonedMaterial.depthWrite = false; // Crucial for water rendering correctly with other transparents
-				clonedMaterial.opacity =
-					materialOptions.opacity !== undefined ? materialOptions.opacity : 0.8; // From original code
-				clonedMaterial.userData.isWater = true;
-				clonedMaterial.userData.faceDirection = direction;
-				if (clonedMaterial instanceof THREE.MeshStandardMaterial) {
-					if (direction === "up") {
-						clonedMaterial.roughness = 0.1;
-						clonedMaterial.metalness = 0.05; // Water isn't very metallic
-					} else {
-						clonedMaterial.roughness = 0.3;
-						clonedMaterial.metalness = 0.0;
-					}
-				}
-			}
-
-			// Specific overrides for Lava
-			if (isLava && clonedMaterial instanceof THREE.MeshStandardMaterial) {
-				// Lava is generally opaque but emissive
-				clonedMaterial.transparent = false;
-				clonedMaterial.alphaTest = 0.0;
-				clonedMaterial.depthWrite = true;
-
-				clonedMaterial.emissive = new THREE.Color(0xdd4400);
-				clonedMaterial.emissiveIntensity = 0.6;
-				clonedMaterial.roughness = 0.8;
-				clonedMaterial.metalness = 0.0;
-				clonedMaterial.userData.isLava = true;
-				clonedMaterial.userData.faceDirection = direction;
-			}
-
-			return clonedMaterial;
+			return newMaterial;
 		} catch (error) {
 			console.warn(`Failed to create material for ${texturePath}:`, error);
 			return new THREE.MeshStandardMaterial({
