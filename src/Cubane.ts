@@ -37,8 +37,31 @@ export class Cubane {
 		"minecraft:chest": "chest",
 		"minecraft:trapped_chest": "trapped_chest",
 		"minecraft:ender_chest": "ender_chest",
+
 		// Note: "minecraft:bell" is removed from here as it's now hybrid
 	};
+
+	private getShulkerBoxEntityMap(): Record<string, string> {
+		// Returns a map of shulker box colors to their entity type
+		return {
+			"minecraft:white_shulker_box": "shulker_box",
+			"minecraft:orange_shulker_box": "shulker_box",
+			"minecraft:magenta_shulker_box": "shulker_box",
+			"minecraft:light_blue_shulker_box": "shulker_box",
+			"minecraft:yellow_shulker_box": "shulker_box",
+			"minecraft:lime_shulker_box": "shulker_box",
+			"minecraft:pink_shulker_box": "shulker_box",
+			"minecraft:gray_shulker_box": "shulker_box",
+			"minecraft:light_gray_shulker_box": "shulker_box",
+			"minecraft:cyan_shulker_box": "shulker_box",
+			"minecraft:purple_shulker_box": "shulker_box",
+			"minecraft:blue_shulker_box": "shulker_box",
+			"minecraft:brown_shulker_box": "shulker_box",
+			"minecraft:green_shulker_box": "shulker_box",
+			"minecraft:red_shulker_box": "shulker_box",
+			"minecraft:black_shulker_box": "shulker_box",
+		};
+	}
 
 	// New map for hybrid blocks: blockId -> configuration for its dynamic part(s)
 	private hybridBlockConfig: Record<string, HybridBlockDynamicPart[]> = {
@@ -72,6 +95,12 @@ export class Cubane {
 		this.initPromise = Promise.resolve().then(() => {
 			this.initialized = true;
 		});
+
+		// Register shulker box entities
+		const shulkerBoxEntityMap = this.getShulkerBoxEntityMap();
+		for (const [blockId, entityType] of Object.entries(shulkerBoxEntityMap)) {
+			this.registerBlockEntity(blockId, entityType);
+		}
 	}
 
 	// --- Database and Resource Pack methods (assumed to be correct and complete) ---

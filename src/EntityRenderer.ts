@@ -47,16 +47,31 @@ export class EntityRenderer {
 					bytes.buffer,
 					"",
 					(gltf: { scene: THREE.Object3D }) => {
-						// Apply any transformations or setup here if needed
 						const model = gltf.scene;
+
+						// Traverse and fix material encoding
+						model.traverse((child) => {
+							if (child instanceof THREE.Mesh && child.material) {
+								const material = child.material as THREE.MeshStandardMaterial;
+
+								// Ensure textures are in linear color space for consistent gamma correction
+								if (material.map) {
+									material.map.colorSpace = THREE.LinearSRGBColorSpace;
+								}
+								if (material.emissiveMap) {
+									material.emissiveMap.colorSpace = THREE.LinearSRGBColorSpace;
+								}
+								// Handle other texture maps as needed
+
+								material.needsUpdate = true;
+							}
+						});
+
 						const group = new THREE.Group();
-						model.position.set(0.5, 0, 0.5);
+						model.position.set(0, -0.5, 0);
 						group.add(model);
 
-						// Cache the original model
 						this.modelCache.set(entityName, group);
-
-						// Return a clone to avoid reference issues
 						resolve(group.clone());
 					},
 					(error: any) => {
